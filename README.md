@@ -1,7 +1,7 @@
 # Pyping
 A GUI-based Ping tool with real-time output, packet loss statistics, duration/count modes, and lightweight chart visualization. Built with Python (tkinter + ping3).   一个带图形界面的 Ping 工具，支持实时输出、丢包率统计、次数/持续时间双模式，以及轻量级图表可视化。基于 Python (tkinter + ping3) 开发。
 # Ping 可视化工具 / Ping Visualizer
-[![GitHub Repo](https://img.shields.io/badge/GitHub-SimplePYping-181717?logo=github)](https://github.com/purrfecto114-lgtm/Pyping/)
+[![GitHub Repo](https://img.shields.io/badge/GitHub-Pyping-181717?logo=github)](https://github.com/purrfecto114-lgtm/Pyping/)
 [![Python Version](https://img.shields.io/badge/python-3.6%2B-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
