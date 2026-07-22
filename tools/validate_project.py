@@ -19,9 +19,13 @@ REQUIRED_RELEASE_FILES = (
     "packaging/clean_windows.bat",
     "packaging/installer/Pyping.iss",
     "packaging/windows_version_info.txt",
-    ".github/workflows/build-windows.yml",
     "pyping_app/assets/pyping.png",
     "pyping_app/assets/pyping.ico",
+)
+
+WORKFLOW_CANDIDATES = (
+    ".github/workflows/build-windows.yml",
+    ".github/workflows/build.yml",
 )
 
 
@@ -125,10 +129,20 @@ def main() -> int:
     if "DEFAULT_WINDOW_HEIGHT * scale" in gui_source:
         problems.append("pyping_app/gui.py: fixed DPI-multiplied startup height remains")
 
-    workflow = (ROOT / ".github" / "workflows" / "build-windows.yml").read_text(encoding="utf-8")
-    for expected in ("actions/checkout@v7", "actions/setup-python@v7", "actions/upload-artifact@v4"):
-        if expected not in workflow:
-            problems.append(f".github/workflows/build-windows.yml: missing {expected}")
+    workflow_path = None
+    for candidate in WORKFLOW_CANDIDATES:
+        if (ROOT / candidate).is_file():
+            workflow_path = ROOT / candidate
+            break
+    if workflow_path is None:
+        problems.append(f"missing workflow file: any of {WORKFLOW_CANDIDATES}")
+    else:
+        workflow = workflow_path.read_text(encoding="utf-8")
+        for expected in ("actions/checkout@v7", "actions/setup-python@v7"):
+            if expected not in workflow:
+                problems.append(f"{workflow_path.relative_to(ROOT)}: missing {expected}")
+        if "actions/upload-artifact@v4" not in workflow and "actions/upload-artifact@v7" not in workflow:
+            problems.append(f"{workflow_path.relative_to(ROOT)}: missing actions/upload-artifact@v4 or @v7")
 
     for spec_name in ("packaging/Pyping.spec", "packaging/Pyping-onefile.spec"):
         spec = (ROOT / spec_name).read_text(encoding="utf-8")
