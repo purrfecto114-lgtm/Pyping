@@ -1,0 +1,39 @@
+name: Build Windows packages
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          architecture: "x64"
+          cache: "pip"
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --yes --no-progress
+
+      - name: Build and validate release
+        shell: pwsh
+        run: ./packaging/build_windows.ps1 -Mode release -RequireInstaller
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pyping-v0.4.0-Windows-x64
+          path: release/*
+          if-no-files-found: error
