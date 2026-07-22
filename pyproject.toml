@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyping-gui"
+version = "0.4.0"
+description = "Cross-platform Tkinter ping tool with preserved-layout GUI optimization and manual time-range charts"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "Pyping contributors" }]
+dependencies = [
+  "ping3>=4.0.8,<6",
+  "Pillow>=10,<13",
+]
+
+[project.gui-scripts]
+pyping-gui = "pyping_app.gui:main"
+
+[tool.setuptools.packages.find]
+include = ["pyping_app*"]
+
+[tool.setuptools.package-data]
+"pyping_app" = ["assets/*.png", "assets/*.ico"]

@@ -1,338 +1,182 @@
-# Pyping
+# Pyping GUI v0.4.0
 
-[![GitHub Repo](https://img.shields.io/badge/GitHub-Pyping-181717?logo=github)](https://github.com/purrfecto114-lgtm/Pyping/)
-[![Python Version](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org/)
-[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+Pyping 是一个基于 Python、Tkinter 与 `ping3` 的跨平台 Ping 桌面工具。本版本在保留原有 GUI 分区和操作顺序的基础上，重点优化界面一致性、长时间运行体验、日志管理、数据导出和 Windows 发布流程。
 
-一个基于 Python `tkinter` 和 `ping3` 的图形化 Ping 工具，支持实时输出、丢包统计、次数/持续时间双模式、轻量级延迟图表、PNG 图片导出，以及 Windows 高 DPI 显示优化。
+## v0.4.0 主要变化
 
-A GUI-based Ping tool built with Python `tkinter` and `ping3`. It supports real-time output, packet loss statistics, count/duration modes, lightweight latency charts, PNG image export, and Windows high-DPI display optimization.
+### 保留布局的 GUI 优化
 
----
+- 参数设置区、操作按钮区、会话统计区、实时输出区和底部状态区顺序保持不变。
+- 使用统一的 Windows 11 / Fluent 风格浅色与深色调色板，分区背景、标签、统计卡片和日志不再出现混色。
+- 输入框、按钮、边距和字体统一；同类输入框保持相同高度和可伸缩宽度。
+- 启动窗口按实际工作区自适应：常规屏幕优先保证约 150 px 日志高度，小高度屏幕自动进入紧凑布局，避免日志和状态栏不可见。
+- 新增会话统计卡片：总数、成功、超时、错误、失败率、平均/最小/最大延迟。
+- 新增底部状态栏：运行状态、运行时间、数据库记录数、队列积压。
+- 新增浅色、深色和跟随系统主题。
+- 新增快捷键：
+  - `Ctrl+Enter`：开始 Ping
+  - `Esc`：停止
+  - `Ctrl+G`：生成图表
+  - `Ctrl+Shift+S`：导出 CSV
 
-## 目录 / Table of Contents
+### 日志与数据
 
-- [功能特性 / Features](#功能特性--features)
-- [截图 / Screenshots](#截图--screenshots)
-- [安装 / Installation](#安装--installation)
-- [运行 / Run](#运行--run)
-- [使用方法 / Usage](#使用方法--usage)
-- [注意事项 / Notes](#注意事项--notes)
-- [PyInstaller 打包 / Build EXE with PyInstaller](#pyinstaller-打包--build-exe-with-pyinstaller)
-- [常见问题 / FAQ](#常见问题--faq)
-- [依赖 / Dependencies](#依赖--dependencies)
-- [许可 / License](#许可--license)
-- [致谢 / Acknowledgements](#致谢--acknowledgements)
-- [贡献 / Contributing](#贡献--contributing)
+- 日志支持自动滚动开关、复制、清空和导出 TXT。
+- 成功、超时、错误和状态信息采用不同颜色。
+- 新增 CSV 流式导出，长会话不会一次性载入内存。
+- CSV 导出使用独立 SQLite 只读连接，不阻塞正常数据库读取。
+- 可清空当前会话统计和图表数据。
 
----
+### 图表
 
-## 功能特性 / Features
+- Ping 结束或停止后不会自动生成图表。
+- 点击“生成图表”后选择时间范围：
+  - 全部数据
+  - 最近 1 分钟
+  - 最近 5 分钟
+  - 最近 15 分钟
+  - 最近 1 小时
+  - 最近 24 小时
+  - 自定义起止时间
+- 超过 5000 个显示点时按时间桶降采样；统计仍基于所选范围的全部原始记录。
+- 超时和错误会中断折线。
+- PNG 使用 Pillow 离屏渲染，不依赖屏幕截图。
 
-### 图形化 Ping 参数设置 / GUI Ping Configuration
+### 测量与稳定性修复
 
-- 支持输入目标主机，域名或 IP 均可。
-- 支持设置 Ping 包大小。
-- 支持设置 Ping 间隔。
-- 支持次数模式和持续时间模式。
+- `ping3` 返回 `False` 时记录为网络错误，不再显示为 `0.00 ms`。
+- 累计统计和图表窗口统计完全分离。
+- 拒绝 `NaN`、`Inf`、异常整数和超大包。
+- 使用 `time.monotonic()` 控制持续时间。
+- 最后一次请求后不再额外等待一个发送间隔。
+- 发送间隔可被停止事件立即打断。
+- 支持 IPv4、IPv6 和双栈域名解析。
+- 每次运行使用独立会话 ID、真实线程引用和有界队列。
+- 实时日志限制为最近 5000 行。
 
-**English:**
+## 环境要求
 
-- Supports target host input, either domain name or IP address.
-- Supports custom packet size.
-- Supports custom ping interval.
-- Supports count mode and duration mode.
+- Python 3.10 或更高版本
+- Tkinter
+- `ping3>=4.0.8,<6`
+- `Pillow>=10,<13`
 
-### 域名预检 / Domain Pre-check
-
-程序开始 Ping 前会先解析目标主机。如果域名无效，会直接弹出错误提示，避免进入无意义的测试流程。
-
-**English:** The program resolves the target host before starting. If the domain is invalid, an error message is shown immediately.
-
-### 实时输出 / Real-time Output
-
-每次 Ping 的结果都会实时显示在输出框中，包括：延迟时间、超时、解析失败、权限不足和其他网络错误。
-
-**English:** Each ping result is displayed in real time, including latency, timeout, DNS resolution failure, permission error, and other network errors.
-
-### 实时统计 / Real-time Statistics
-
-底部状态栏会实时更新：总包数、丢包数、丢包率、平均延迟。
-
-**English:** The status bar updates in real time: total packets, lost packets, packet loss rate, and average latency.
-
-### 双模式支持 / Dual Mode Support
-
-- **次数模式 / Count Mode**：设置固定 Ping 次数。`0` 或留空表示无限 Ping，直到手动停止。
-- **持续时间模式 / Duration Mode**：设置持续时间（秒），时间到达后程序自动停止。
-
-**English:**
-- **Count Mode**: Set a fixed number of pings. `0` or empty means unlimited pinging until manually stopped.
-- **Duration Mode**: Set a duration in seconds. The program stops automatically when the duration is reached.
-
-### 延迟图表 / Latency Chart
-
-Ping 结束后，如果存在有效数据，程序会自动弹出图表窗口。图表包含：蓝色折线（延迟变化）、红色 X（丢包点）、底部统计摘要、目标主机标题和图例说明。
-
-**English:** After pinging finishes, a chart window is automatically shown if data exists. It includes a blue line (latency trend), red X (packet loss points), bottom statistics summary, target host title, and legend.
-
-### PNG 图片导出 / PNG Image Export
-
-图表支持保存为 PNG 图片。当前版本使用 Pillow 的 `ImageGrab` 截取图表 Canvas 区域导出 PNG，不再依赖 Ghostscript。
-
-**English:** The chart can be exported as a PNG image. The current version uses Pillow `ImageGrab` to capture the chart Canvas area and export it as PNG. Ghostscript is no longer required.
-
-### 高 DPI 优化 / High-DPI Optimization
-
-针对 Windows 高分辨率屏幕进行了全面优化，已解决按钮显示不完整、布局溢出、图表图例超界和字体缩放异常等问题。
-
-**English:** Fully optimized for high-resolution Windows displays. Issues like incomplete buttons, layout overflow, legend clipping, and abnormal font scaling have been resolved.
-
-### 多语言支持 / Multi-language Support
-
-当前支持简体中文和 English。
-
-**English:** Currently supports Simplified Chinese and English.
-
-### 图表窗口管理 / Chart Window Management
-
-如果上一次图表窗口仍未关闭，再次生成图表时程序会弹出保存确认，避免误覆盖或丢失数据。
-
-**English:** If a previous chart window is still open, the program asks whether to save it before generating a new chart, preventing accidental data loss.
-
----
-
-## 截图 / Screenshots
-
-请访问 [Releases 页面](https://github.com/purrfecto114-lgtm/Pyping/releases) 查看截图。
-
-**English:** Please visit the [Releases page](https://github.com/purrfecto114-lgtm/Pyping/releases) for screenshots.
-
----
-
-## 安装 / Installation
-
-### 环境要求 / Requirements
-
-- Python 3.8 或更高版本
-- Windows / Linux / macOS
-- Python 依赖: `ping3`, `Pillow`
-- `tkinter` 通常随 Python 自带，无需额外安装。
-
-**English:**
-- Python 3.8+
-- Windows / Linux / macOS
-- Python dependencies: `ping3`, `Pillow`
-- `tkinter` is usually bundled with Python.
-
-### 克隆仓库 / Clone Repository
+安装依赖：
 
 ```bash
-git clone https://github.com/purrfecto114-lgtm/Pyping.git
-cd Pyping
+python -m pip install -r requirements.txt
 ```
 
-### 安装依赖 / Install Dependencies
-
-推荐在虚拟环境中安装：
-
-```bash
-# 创建虚拟环境（可选）
-python -m venv venv
-# 激活虚拟环境
-# Windows: venv\Scripts\activate
-# Linux/macOS: source venv/bin/activate
-
-# 安装依赖
-pip install -r requirements.txt
-```
-
-如果仓库中没有 `requirements.txt`，可手动安装：
-
-```bash
-pip install ping3 pillow
-```
-
----
-
-## 运行 / Run
-
-假设主程序文件名为 `PingTool.py`：
+运行：
 
 ```bash
 python PingTool.py
 ```
 
-如果你的文件名不同，请替换为实际文件名。
-
-**English:** Run the main script (default name: `PingTool.py`). Replace with your actual filename if different.
-
----
-
-## 使用方法 / Usage
-
-1. 启动程序。
-2. 输入目标主机（例如 `www.bing.com` 或 `8.8.8.8`）。
-3. 设置包大小。
-4. 设置 Ping 间隔。
-5. 选择模式：次数模式或持续时间模式。
-6. 点击“开始 Ping”。
-7. 在实时输出框查看结果。
-8. 可随时点击“停止”手动结束。
-9. Ping 结束后自动查看图表。
-10. 点击“保存为图片”导出 PNG 图表。
-
-**English:**
-1. Start the program.
-2. Enter a target host (e.g., `www.bing.com` or `8.8.8.8`).
-3. Set packet size.
-4. Set ping interval.
-5. Choose mode: count or duration.
-6. Click "Start Ping".
-7. View real-time output.
-8. Click "Stop" to manually stop at any time.
-9. View the chart after pinging finishes.
-10. Click "Save as Image" to export the chart as PNG.
-
----
-
-## 注意事项 / Notes
-
-### ICMP 权限 / ICMP Permission
-
-`ping3` 使用 ICMP 协议。在某些系统中，发送 ICMP 包可能需要管理员/root 权限：
-
-- **Windows**：如遇权限错误，请以管理员身份运行。
-- **Linux**：可能需要 `sudo python PingTool.py`。
-
-**English:** `ping3` uses ICMP. On some systems, administrator/root privileges may be required. On Windows, run as administrator if a permission error occurs. On Linux, you may need `sudo python PingTool.py`.
-
-### PNG 导出 / PNG Export
-
-PNG 导出依赖 Pillow，无需 Ghostscript。如果缺少 Pillow，请安装：
+也可安装为命令：
 
 ```bash
-pip install pillow
+python -m pip install .
+pyping-gui
 ```
 
-**English:** PNG export requires Pillow; Ghostscript is not needed. Install Pillow with `pip install pillow` if missing.
+## 使用流程
 
----
+1. 输入域名、IPv4 地址或 IPv6 地址。
+2. 设置 ICMP 负载、发送间隔和单次超时。
+3. 选择次数模式或持续时间模式。
+4. 点击“开始 Ping”。运行期间参数会锁定。
+5. 点击“停止”或等待任务自然结束。
+6. 根据需要导出 CSV，或点击“生成图表”选择时间段。
+7. 在图表窗口中保存 PNG。
 
-## PyInstaller 打包 / Build EXE with PyInstaller
+运行期间也可对当前已写入数据库的记录生成图表或导出 CSV。
 
-### 安装 PyInstaller / Install PyInstaller
+## 输入范围
+
+| 参数 | 范围 |
+|---|---|
+| ICMP 负载大小 | 1–65500 字节 |
+| 发送间隔 | 0.1–86400 秒 |
+| 单次超时 | 0.05–300 秒 |
+| 次数 | 1–10000000；0 或空表示无限 |
+| 持续时间 | 大于 0，最长 31 天 |
+
+## 数据存储
+
+每次会话创建独立临时 SQLite 数据库：
+
+- UI 线程批量写入结果；
+- Ping 工作线程不直接操作 Tk 控件；
+- 队列有容量上限；
+- 新会话开始时清理上一会话数据库；
+- 应用正常退出时删除临时数据库和 WAL 文件；
+- CSV 采用批量读取和流式写入。
+
+## 测试与验证
 
 ```bash
-pip install -U pyinstaller
+python -m unittest discover -s tests -p "test_*.py" -v
+python tools/validate_project.py
 ```
 
-> **注意**：在 Windows 上执行以下命令；Linux/macOS 用户请将续行符 `^` 替换为 `\`。
-
-### 推荐：目录模式 / Recommended: One-directory Mode
-
-开发测试阶段推荐使用 `--onedir`。
+Linux 安装 Xvfb 后可运行 GUI 冒烟测试：
 
 ```bash
-pyinstaller ^
-  --clean ^
-  --noconfirm ^
-  --onedir ^
-  --windowed ^
-  --name "PingTool" ^
-  --hidden-import ping3 ^
-  --hidden-import PIL ^
-  --hidden-import PIL.ImageGrab ^
-  PingTool.py
+PYTHONPATH=. xvfb-run -a python tests/gui_smoke.py
 ```
 
-生成路径：`dist/PingTool/PingTool.exe`。请保留整个 `dist/PingTool/` 文件夹，不要只复制 `.exe` 文件。
+## Windows 打包
 
-**English:** The output is in `dist/PingTool/`. Keep the entire folder; do not copy only the `.exe` file.
+正式发布推荐采用：
 
-### 单文件模式 / One-file Mode
+1. PyInstaller `onedir`；
+2. Inno Setup 安装程序；
+3. ZIP 便携版；
+4. 可选 `onefile` 单 EXE。
 
-如果只需要一个 exe 文件：
+本地生成完整发布包（onedir、onefile、便携 ZIP、SHA256；安装 Inno Setup 时同时生成安装器）：
 
-```bash
-pyinstaller ^
-  --clean ^
-  --noconfirm ^
-  --onefile ^
-  --windowed ^
-  --name "PingTool" ^
-  --hidden-import ping3 ^
-  --hidden-import PIL ^
-  --hidden-import PIL.ImageGrab ^
-  PingTool.py
+```text
+packaging\build_windows.bat
 ```
 
-生成路径：`dist/PingTool.exe`。单文件模式启动时需解包，启动速度可能略慢。
+脚本会自动查找 Python 3.10+，不会绑定某一个 Python 小版本。仅执行检查：
 
-**English:** Single executable is generated at `dist/PingTool.exe`. It may start slower due to on‑the‑fly unpacking.
-
-### 调试打包问题 / Debug Build
-
-如果 exe 打开后闪退，请使用控制台模式查看错误信息：
-
-```bash
-pyinstaller ^
-  --clean ^
-  --noconfirm ^
-  --onedir ^
-  --console ^
-  --name "PingTool_Debug" ^
-  --hidden-import ping3 ^
-  --hidden-import PIL ^
-  --hidden-import PIL.ImageGrab ^
-  PingTool.py
+```powershell
+powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1 -Mode check
 ```
 
-然后运行 `dist/PingTool_Debug/PingTool_Debug.exe`，控制台会显示错误信息。
+清理生成目录：
 
-**English:** Use `--console` mode to see error messages if the GUI crashes immediately.
+```text
+packaging\clean_windows.bat
+```
 
----
+便携单文件版：
 
-## 常见问题 / FAQ
+```text
+packaging\build_portable_onefile.bat
+```
 
-**Q: 为什么 `dist` 里的 exe 要和文件夹一起复制？**  
-A: 如果使用 `--onedir`，必须复制整个 `dist/PingTool/` 文件夹，因为程序依赖其中的库文件。
+详细说明见：
 
-**Q: 为什么 PNG 导出不需要 Ghostscript？**  
-A: 当前版本使用 Pillow 的 `ImageGrab` 直接截取 Canvas 区域保存为 PNG，不再通过 `postscript()` 转换。
+```text
+packaging\README_PACKAGING.md
+```
 
-**Q: 高 DPI 下按钮曾经显示不完整，现在是如何解决的？**  
-A: 按钮宽度改用等比例网格布局，避免字符宽度在高缩放比下溢出窗口。图表图例也做了动态边距计算，确保完整显示。
+仓库同时包含 GitHub Actions Windows 自动构建工作流：
 
----
+```text
+.github\workflows\build-windows.yml
+```
 
-## 依赖 / Dependencies
+> PyInstaller 不是交叉编译器。Windows EXE 必须在 Windows 环境中构建。
 
-- `ping3`：发送 ICMP 包并获取延迟
-- `Pillow`：用于 PNG 图片导出
-- `tkinter`：图形界面，Python 标准库
-- `threading`：后台 Ping 线程，Python 标准库
-- `queue`：线程间通信，Python 标准库
-- `socket`：域名解析，Python 标准库
-- `datetime`：时间戳记录，Python 标准库
+## 权限说明
 
----
+`ping3` 使用 ICMP。部分 Linux/macOS 环境可能需要配置 ICMP 权限。应优先采用系统提供的最小权限配置，不建议长期以 root 或管理员身份运行整个 GUI。
 
-## 许可 / License
+## 项目地址
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
-
----
-
-## 致谢 / Acknowledgements
-
-Part of this project was generated or optimized with the assistance of AI.  
-本项目的部分代码由 AI 辅助生成与优化。
-
----
-
-## 贡献 / Contributing
-
-Issues and Pull Requests are welcome.  
-欢迎提交 Issue 或 Pull Request 来改进这个工具。
+https://github.com/purrfecto114-lgtm/Pyping
