@@ -205,13 +205,19 @@ def main() -> int:
         f'#define MyAppVersion "{project_version}"',
         "SourceDir={#ProjectRoot}",
         r'Source: "dist\Pyping\*"',
-        r'MessagesFile: "compiler:Languages\ChineseSimplified.isl"',
     ):
         if expected not in installer_script:
             problems.append(f"packaging/installer/Pyping.iss: missing {expected}")
 
-    if (ROOT / "packaging" / "installer" / "Languages").exists():
-        problems.append("packaging/installer/Languages: obsolete vendored language directory remains")
+    # ChineseSimplified.isl is not shipped with Inno Setup 6 (only Inno Setup 7+).
+    # The windows-2022 GitHub Actions runner still provides Inno Setup 6, so the
+    # language file must be vendored into the repository and referenced via a
+    # project-relative path.
+    if r'MessagesFile: "packaging\installer\Languages\ChineseSimplified.isl"' not in installer_script:
+        problems.append('packaging/installer/Pyping.iss: missing vendored ChineseSimplified.isl MessagesFile reference')
+    vendored_isl = ROOT / "packaging" / "installer" / "Languages" / "ChineseSimplified.isl"
+    if not vendored_isl.is_file():
+        problems.append("packaging/installer/Languages/ChineseSimplified.isl: vendored language file is missing")
 
     gui_source = (ROOT / "pyping_app" / "gui.py").read_text(encoding="utf-8")
     for expected in (

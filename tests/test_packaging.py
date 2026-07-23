@@ -55,8 +55,16 @@ class PackagingTests(unittest.TestCase):
         self.assertIn("SourceDir={#ProjectRoot}", source)
         self.assertIn('Source: "dist\\Pyping\\*"', source)
         self.assertIn('#define MyAppVersion "0.4.0"', source)
-        self.assertIn('MessagesFile: "compiler:Languages\\ChineseSimplified.isl"', source)
-        self.assertFalse((ROOT / "packaging" / "installer" / "Languages").exists())
+        # ChineseSimplified.isl is not shipped with Inno Setup 6 on the
+        # windows-2022 runner, so it must be vendored into the repository
+        # and referenced via a project-relative path.
+        self.assertIn(
+            'MessagesFile: "packaging\\installer\\Languages\\ChineseSimplified.isl"',
+            source,
+        )
+        self.assertTrue(
+            (ROOT / "packaging" / "installer" / "Languages" / "ChineseSimplified.isl").is_file()
+        )
 
     def test_release_workflow_uses_read_only_build_and_sha_pins(self) -> None:
         path = ROOT / ".github" / "workflows" / "build-windows.yml"
