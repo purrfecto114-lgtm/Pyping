@@ -2,6 +2,21 @@
 
 ## v0.4.0
 
+### Security hardening update (version unchanged)
+
+- Split Windows build and release publication into separate least-privilege jobs.
+- Pinned every external GitHub Action to an immutable full commit SHA.
+- Removed Chocolatey installation, shared dependency caching, wildcard release uploads and the third-party release Action.
+- Added exact release manifests, SHA-256 verification, protected release output names and a read-only CI workflow.
+- Added a complete SHA-256 hashed Windows dependency lock for Python 3.10–3.13, force-reinstallation, and an installed-distribution allowlist; unverified source distributions are disabled during frozen builds.
+- Added safe project-bound cleanup that rejects external paths, never traverses reparse points, and removes stale `*.egg-info` metadata.
+- Replaced the dangling vendored Inno Setup language-file reference with the compiler-provided Simplified Chinese language file.
+- Changed SQLite writes from silent replacement to transactional duplicate rejection.
+- Added atomic CSV, PNG and text exports, CSV formula neutralization and active-database overwrite protection.
+- Required release tags to point to commits reachable from the default branch.
+- Removed PATH-controlled font discovery, bounded PNG dimensions and chart sampling, limited stored error details, and cancelled pending Tk callbacks on chart close.
+- Added `SECURITY.md`, Dependabot configuration and expanded security regression tests.
+
 ### Maintenance rewrite (version unchanged)
 
 - Rewrote the visual shell while preserving the parameter/action/statistics/output/status layout order.
@@ -11,7 +26,7 @@
 - Added adaptive startup sizing based on the usable desktop work area instead of DPI-multiplying a fixed geometry.
 - Added a compact-height layout for small displays and guaranteed that the output log remains visible at startup.
 - Reduced the statistics area to one responsive row so the log receives more vertical space.
-- Rewrote the Windows build driver with Python 3.10+ discovery, checked native exit codes and explicit build modes.
+- Rewrote the Windows build driver with Python 3.10–3.13 discovery, checked native exit codes and explicit build modes.
 - Fixed batch exit-code propagation and Inno Setup paths that depended on the caller's working directory.
 - Added a safe clean mode and removed generated caches and obsolete validation artifacts from release sources.
 - Updated the Windows workflow and added packaging regression tests.

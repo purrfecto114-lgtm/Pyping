@@ -58,8 +58,8 @@ Pyping 是一个基于 Python、Tkinter 与 `ping3` 的跨平台 Ping 桌面工�
 
 - Python 3.10 或更高版本
 - Tkinter
-- `ping3>=4.0.8,<6`
-- `Pillow>=10,<13`
+- `ping3>=5.1.5,<6`
+- `Pillow>=12.3.0,<13`
 
 安装依赖：
 
@@ -126,52 +126,66 @@ Linux 安装 Xvfb 后可运行 GUI 冒烟测试：
 PYTHONPATH=. xvfb-run -a python tests/gui_smoke.py
 ```
 
-## Windows 打包
+## Windows 打包与安全发布
 
-正式发布推荐采用：
+正式发布采用以下组合：
 
-1. PyInstaller `onedir`；
+1. PyInstaller `onedir` 作为安装器输入；
 2. Inno Setup 安装程序；
 3. ZIP 便携版；
 4. 可选 `onefile` 单 EXE。
 
-本地生成完整发布包（onedir、onefile、便携 ZIP、SHA256；安装 Inno Setup 时同时生成安装器）：
+本地完整构建：
 
 ```text
 packaging\build_windows.bat
 ```
 
-脚本会自动查找 Python 3.10+，不会绑定某一个 Python 小版本。仅执行检查：
+仅执行测试、静态策略和版本一致性检查：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1 -Mode check
+powershell -NoProfile -File packaging\build_windows.ps1 -Mode check
 ```
 
-清理生成目录：
+清理构建结果和缓存：
 
 ```text
 packaging\clean_windows.bat
 ```
 
-便携单文件版：
+构建脚本会：
+
+- 仅接受 64 位 Python 3.10–3.13；
+- 在 `.venv-build` 中使用 `packaging/requirements-windows.lock` 安装完整锁定的运行时和 PyInstaller 依赖；
+- 对每个 Windows wheel 强制校验 SHA-256，强制重新安装，并禁用共享 pip 缓存及源码包；
+- 校验构建虚拟环境只包含锁文件允许的发行包，拒绝残留或额外依赖；
+- 检查测试、静态安全策略、版本资源和发布产物；
+- 输出 `release-manifest.json` 与 `SHA256SUMS.txt`；
+- 拒绝发布目录中的额外文件。
+
+详细命令和产物说明见 `packaging\README_PACKAGING.md`。
+
+仓库包含两个 GitHub Actions 工作流：
 
 ```text
-packaging\build_portable_onefile.bat
-```
-
-详细说明见：
-
-```text
-packaging\README_PACKAGING.md
-```
-
-仓库同时包含 GitHub Actions Windows 自动构建工作流：
-
-```text
+.github\workflows\ci.yml
 .github\workflows\build-windows.yml
 ```
 
-> PyInstaller 不是交叉编译器。Windows EXE 必须在 Windows 环境中构建。
+安全边界如下：
+
+- PR、主分支验证和 Windows 构建均只有 `contents: read`；
+- checkout 不持久化仓库凭据；
+- 外部 Actions 固定到完整 commit SHA；
+- 版本标签必须指向默认分支可达的提交；
+- 构建作业不具备发布权限；
+- 仅独立发布作业获得 `contents: write`，且不 checkout 或执行仓库代码；
+- 发布前再次校验固定文件名、manifest 与 SHA-256；
+- Release 不再依赖第三方发布 Action。
+
+本次安全维护还包括：CSV 公式注入防护与原子写出、SQLite 重复序号/非法记录硬失败、图表尺寸边界、禁止通过 PATH 调用外部字体探测程序，以及关闭图表窗口时取消待执行的 Tk 回调。
+
+生产仓库应在 GitHub 中为 `release` Environment 配置 required reviewers，并保护 `v*` 标签。PyInstaller 不是交叉编译器，Windows EXE 必须在可信 Windows 环境构建。
 
 ## 权限说明
 

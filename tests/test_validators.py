@@ -35,6 +35,8 @@ class ValidatorTests(unittest.TestCase):
     def test_host_normalization(self):
         self.assertEqual(parse_host(" [::1] "), "::1")
         self.assert_invalid(parse_host, "bad host")
+        for value in ("example.com\x00", "example.com\x1f", "example.com\x7f"):
+            self.assert_invalid(parse_host, value)
 
 
 if __name__ == "__main__":

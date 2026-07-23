@@ -4,7 +4,8 @@ import pathlib
 import sys
 import time
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -53,13 +54,13 @@ def run_session_smoke() -> None:
     root.update()
     chart.draw_chart()
     assert len(chart.canvas.find_all()) > 0
-    chart.dirty = False
-    chart.close_window()
+    app.chart_windows.append(chart)
 
     app.change_language("en_US")
     root.update_idletasks()
     assert app.lang == "en_US"
     assert app.metric_vars["total_packets"].get() == "3"
+    assert chart.winfo_exists(), "language switch destroyed an unsaved chart window"
 
     app.theme_var.set("dark")
     app.change_theme()
@@ -81,6 +82,23 @@ def run_session_smoke() -> None:
         for widget in (app.host_entry, app.size_entry, app.interval_entry, app.timeout_entry, app.count_entry)
     }
     assert len(entry_heights) == 1, entry_heights
+
+    # Cancelling an unsaved-chart prompt must not partially stop the main app.
+    app.running = True
+    app.stop_event.clear()
+    chart.dirty = True
+    with mock.patch.object(messagebox, "askyesno", return_value=True), mock.patch.object(
+        messagebox, "askyesnocancel", return_value=None
+    ):
+        app.on_close()
+    root.update_idletasks()
+    assert root.winfo_exists()
+    assert not app.stop_event.is_set()
+    assert app.status_after_id is not None
+    assert chart.winfo_exists()
+
+    app.running = False
+    chart.dirty = False
     app.on_close()
 
 

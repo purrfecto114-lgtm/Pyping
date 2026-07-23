@@ -6,9 +6,14 @@ import sqlite3
 import tempfile
 import threading
 from datetime import datetime
+from pathlib import Path
 from typing import Iterable
 
+from .fileio import atomic_output_path, normalize_output_path, spreadsheet_safe_text
 from .models import ChartSample, PingRecord, RangeStatistics, ResultStatus
+
+MAX_CHART_POINTS = 50_000
+MAX_RECORD_DETAIL_LENGTH = 1000
 
 
 class SessionStore:
@@ -20,14 +25,21 @@ class SessionStore:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.execute(
-            """
+            f"""
             CREATE TABLE records (
-                sequence INTEGER PRIMARY KEY,
-                wall_ts REAL NOT NULL,
-                elapsed REAL NOT NULL,
-                latency REAL,
-                status TEXT NOT NULL,
-                detail TEXT NOT NULL
+                sequence INTEGER PRIMARY KEY CHECK(sequence > 0),
+                wall_ts REAL NOT NULL CHECK(wall_ts > 0),
+                elapsed REAL NOT NULL CHECK(elapsed >= 0),
+                latency REAL CHECK(latency IS NULL OR latency >= 0),
+                status TEXT NOT NULL CHECK(status IN (
+                    'success', 'timeout', 'resolve_error', 'permission_error',
+                    'network_error', 'internal_error', 'missing_dependency'
+                )),
+                detail TEXT NOT NULL CHECK(length(detail) <= {MAX_RECORD_DETAIL_LENGTH}),
+                CHECK(
+                    (status = 'success' AND latency IS NOT NULL) OR
+                    (status <> 'success' AND latency IS NULL)
+                )
             )
             """
         )
@@ -35,7 +47,7 @@ class SessionStore:
         self._conn.commit()
         self._closed = False
 
-    def insert_many(self, records: Iterable[PingRecord]) -> None:
+    def insert_many(self, records: Iterable[PingRecord]) -> int:
         rows = [
             (
                 record.sequence,
@@ -48,12 +60,17 @@ class SessionStore:
             for record in records
         ]
         if not rows:
-            return
+            return 0
         with self._lock:
-            self._conn.executemany(
-                "INSERT OR REPLACE INTO records VALUES (?, ?, ?, ?, ?, ?)", rows
-            )
-            self._conn.commit()
+            try:
+                self._conn.executemany(
+                    "INSERT INTO records VALUES (?, ?, ?, ?, ?, ?)", rows
+                )
+                self._conn.commit()
+            except sqlite3.Error:
+                self._conn.rollback()
+                raise
+        return len(rows)
 
     def count(self) -> int:
         with self._lock:
@@ -114,6 +131,10 @@ class SessionStore:
         *,
         max_points: int = 5000,
     ) -> tuple[list[ChartSample], bool, int]:
+        if not 1 <= max_points <= MAX_CHART_POINTS:
+            raise ValueError(
+                f"max_points must be between 1 and {MAX_CHART_POINTS}"
+            )
         start_ts, end_ts = start.timestamp(), end.timestamp()
         with self._lock:
             count = int(
@@ -210,13 +231,25 @@ class SessionStore:
         end: datetime | None = None,
         batch_size: int = 5000,
     ) -> int:
-        """Export a committed snapshot through a separate read connection.
+        """Atomically export a committed, read-only snapshot.
 
-        A separate connection keeps the GUI writer responsive under WAL mode and
-        avoids loading long sessions into memory.
+        A separate read-only connection keeps the GUI writer responsive under WAL
+        mode. The destination is replaced only after the complete CSV has been
+        flushed, so a failed export cannot destroy an existing file or leave a
+        misleading partial result.
         """
         if batch_size <= 0:
             raise ValueError("batch_size must be positive")
+
+        target = normalize_output_path(path)
+        protected = {
+            Path(self.path).resolve(),
+            Path(self.path + "-wal").resolve(),
+            Path(self.path + "-shm").resolve(),
+        }
+        if target.resolve(strict=False) in protected:
+            raise ValueError("CSV destination must not overwrite the active session database")
+
         query = (
             "SELECT sequence, wall_ts, elapsed, latency, status, detail "
             "FROM records"
@@ -233,40 +266,46 @@ class SessionStore:
             query += " WHERE " + " AND ".join(clauses)
         query += " ORDER BY sequence"
 
-        connection = sqlite3.connect(self.path)
+        database_uri = Path(self.path).resolve().as_uri() + "?mode=ro"
+        connection = sqlite3.connect(database_uri, uri=True)
         count = 0
         try:
             connection.execute("PRAGMA query_only=ON")
             connection.execute("BEGIN")
             cursor = connection.execute(query, params)
-            with open(path, "w", encoding="utf-8-sig", newline="") as handle:
-                writer = csv.writer(handle)
-                writer.writerow(
-                    (
-                        "sequence",
-                        "timestamp",
-                        "elapsed_seconds",
-                        "latency_ms",
-                        "status",
-                        "detail",
-                    )
-                )
-                while True:
-                    rows = cursor.fetchmany(batch_size)
-                    if not rows:
-                        break
-                    for sequence, wall_ts, elapsed, latency, status, detail in rows:
-                        writer.writerow(
-                            (
-                                sequence,
-                                datetime.fromtimestamp(wall_ts).isoformat(sep=" ", timespec="milliseconds"),
-                                f"{float(elapsed):.6f}",
-                                "" if latency is None else f"{float(latency):.6f}",
-                                status,
-                                detail,
-                            )
+            with atomic_output_path(target, suffix=".csv.tmp") as temporary:
+                with temporary.open("w", encoding="utf-8-sig", newline="") as handle:
+                    writer = csv.writer(handle)
+                    writer.writerow(
+                        (
+                            "sequence",
+                            "timestamp",
+                            "elapsed_seconds",
+                            "latency_ms",
+                            "status",
+                            "detail",
                         )
-                    count += len(rows)
+                    )
+                    while True:
+                        rows = cursor.fetchmany(batch_size)
+                        if not rows:
+                            break
+                        for sequence, wall_ts, elapsed, latency, status, detail in rows:
+                            writer.writerow(
+                                (
+                                    sequence,
+                                    datetime.fromtimestamp(wall_ts).isoformat(
+                                        sep=" ", timespec="milliseconds"
+                                    ),
+                                    f"{float(elapsed):.6f}",
+                                    "" if latency is None else f"{float(latency):.6f}",
+                                    spreadsheet_safe_text(status),
+                                    spreadsheet_safe_text(detail),
+                                )
+                            )
+                        count += len(rows)
+                    handle.flush()
+                    os.fsync(handle.fileno())
             connection.commit()
         finally:
             connection.close()

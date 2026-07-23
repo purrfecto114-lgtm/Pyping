@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools==83.0.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -11,8 +11,8 @@ requires-python = ">=3.10"
 license = { file = "LICENSE" }
 authors = [{ name = "Pyping contributors" }]
 dependencies = [
-  "ping3>=4.0.8,<6",
-  "Pillow>=10,<13",
+  "ping3>=5.1.5,<6",
+  "Pillow>=12.3.0,<13",
 ]
 
 [project.gui-scripts]

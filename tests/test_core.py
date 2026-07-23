@@ -15,6 +15,18 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(outcome.status, ResultStatus.NETWORK_ERROR)
         self.assertIsNone(outcome.latency_ms)
 
+    def test_error_details_are_single_line_and_bounded(self):
+        def failed(*args, **kwargs):
+            raise RuntimeError("first line\nsecond line" + "x" * 2000)
+
+        outcome = PingBackend(failed).ping(
+            "127.0.0.1", timeout=1, size=56, sequence=0
+        )
+        self.assertEqual(outcome.status, ResultStatus.INTERNAL_ERROR)
+        self.assertNotIn("\n", outcome.detail)
+        self.assertNotIn("\r", outcome.detail)
+        self.assertLessEqual(len(outcome.detail), 1000)
+
     def test_invalid_numeric_result_is_internal_error(self):
         backend = PingBackend(lambda *args, **kwargs: float("nan"))
         outcome = backend.ping("127.0.0.1", timeout=1, size=56, sequence=0)

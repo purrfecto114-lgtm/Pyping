@@ -3,6 +3,7 @@ from __future__ import annotations
 import locale
 import os
 import queue
+import sqlite3
 import sys
 import threading
 import time
@@ -18,6 +19,7 @@ from .charting import (
     sample_xy,
 )
 from .core import PingBackend, run_ping_session
+from .fileio import atomic_write_text
 from .i18n import LANGUAGES, LANGUAGE_NAMES
 from .models import (
     ChartSample,
@@ -308,9 +310,12 @@ class TimeRangeDialog:
     def _parse_datetime(value: str) -> datetime:
         text = value.strip()
         try:
-            return datetime.strptime(text, TIME_FORMAT)
+            result = datetime.strptime(text, TIME_FORMAT)
         except ValueError:
-            return datetime.fromisoformat(text)
+            result = datetime.fromisoformat(text)
+        if result.tzinfo is not None:
+            raise ValueError("Time-range values must use local time without a UTC offset")
+        return result
 
     def _confirm(self) -> None:
         try:
@@ -324,7 +329,12 @@ class TimeRangeDialog:
             messagebox.showerror(self.t["error_title"], self.t["range_invalid"], parent=self.dialog)
             return
         start = max(start, bounds_start)
-        end = min(end + timedelta(seconds=0.999999), bounds_end + timedelta(seconds=0.999999))
+        end = min(end, bounds_end)
+        if end < bounds_end:
+            try:
+                end = min(end + timedelta(seconds=0.999999), bounds_end)
+            except OverflowError:
+                end = bounds_end
         self.result = (start, end)
         self.dialog.destroy()
 
@@ -399,7 +409,16 @@ class ChartWindow(tk.Toplevel):
         if not pillow_available:
             self.save_btn.configure(state="disabled")
 
-        self.after_idle(self.draw_chart)
+        self._draw_after_id = self.after_idle(self.draw_chart)
+
+    def _cancel_pending_draw(self) -> None:
+        if self._draw_after_id is None:
+            return
+        try:
+            self.after_cancel(self._draw_after_id)
+        except tk.TclError:
+            pass
+        self._draw_after_id = None
 
     def _schedule_draw(self, _event=None) -> None:
         if self._draw_after_id is not None:
@@ -419,7 +438,9 @@ class ChartWindow(tk.Toplevel):
         return minimum
 
     def draw_chart(self) -> None:
-        self._draw_after_id = None
+        # This method is also called directly after theme changes.  Cancel any
+        # queued resize draw first so it cannot outlive the Toplevel command.
+        self._cancel_pending_draw()
         if not self.winfo_exists():
             return
         self.canvas.delete("all")
@@ -547,6 +568,7 @@ class ChartWindow(tk.Toplevel):
                 return
             if answer and self.save_chart() != "saved":
                 return
+        self._cancel_pending_draw()
         try:
             self.on_closed(self)
         finally:
@@ -1228,10 +1250,7 @@ class PingApp:
             if message.session_id != self.session_id:
                 continue
             if message.kind == "record":
-                record = message.payload
-                records.append(record)
-                self.statistics.update(record)
-                log_items.append((self._format_record(record), self._record_tag(record.status)))
+                records.append(message.payload)
             elif message.kind == "resolved":
                 target = message.payload
                 self.current_resolved_address = target.address
@@ -1244,8 +1263,16 @@ class PingApp:
                 finished_reason = str(message.payload)
 
         if records and self.current_store is not None:
-            self.current_store.insert_many(records)
-            self.persisted_count += len(records)
+            try:
+                inserted = self.current_store.insert_many(records)
+                self.persisted_count += inserted
+                for record in records:
+                    self.statistics.update(record)
+                    log_items.append((self._format_record(record), self._record_tag(record.status)))
+            except (sqlite3.Error, OSError) as exc:
+                self.stop_event.set()
+                log_items.append((f"{self._s('run_worker_error').format(detail=exc)}\n", "error"))
+                finished_reason = "internal_error"
         for text, tag in log_items:
             self._append_log(text, tag)
         if records:
@@ -1320,8 +1347,7 @@ class PingApp:
         if not path:
             return
         try:
-            with open(path, "w", encoding="utf-8", newline="") as handle:
-                handle.write(text)
+            atomic_write_text(path, text, encoding="utf-8", newline="")
         except OSError as exc:
             messagebox.showerror(self._s("error_title"), f"{self._s('export_failed')}\n{exc}", parent=self.root)
             return
@@ -1394,8 +1420,13 @@ class PingApp:
         self.status_key = "state_stopped" if reason == "stopped" else "state_finished" if reason == "completed" else "state_error"
         self._set_inputs_enabled(True)
         self._refresh_button_states()
-        message = self._s("run_stopped") if reason == "stopped" else self._s("run_finished")
-        self._append_log(message + "\n", "info" if reason in {"completed", "stopped"} else "error")
+        if reason == "stopped":
+            message, tag = self._s("run_stopped"), "info"
+        elif reason == "completed":
+            message, tag = self._s("run_finished"), "info"
+        else:
+            message, tag = self._s("run_failed"), "error"
+        self._append_log(message + "\n", tag)
         self._update_status_display()
 
     def stop_ping(self) -> None:
@@ -1534,6 +1565,8 @@ class PingApp:
         self.menu_lang_var.set(lang)
         self.root.title(self.t["app_title"])
         for child in self.root.winfo_children():
+            if isinstance(child, ChartWindow):
+                continue
             child.destroy()
         self._setup_style()
         self.create_widgets()
@@ -1583,9 +1616,23 @@ class PingApp:
         if self.export_in_progress:
             messagebox.showwarning(self._s("export_busy_title"), self._s("export_busy_message"), parent=self.root)
             return
-        if self.running:
-            if not messagebox.askyesno(self._s("confirm_close_title"), self._s("confirm_close"), parent=self.root):
+        if self.running and not messagebox.askyesno(
+            self._s("confirm_close_title"), self._s("confirm_close"), parent=self.root
+        ):
+            return
+
+        # Resolve all unsaved chart prompts before changing the active session.
+        # Cancelling a chart close must leave polling and the running Ping intact.
+        for chart in list(self.chart_windows):
+            try:
+                chart.close_window()
+                still_exists = bool(chart.winfo_exists())
+            except tk.TclError:
+                still_exists = False
+            if still_exists:
                 return
+
+        if self.running:
             self.stop_event.set()
         for after_name in ("after_id", "status_after_id", "dependency_after_id"):
             after_value = getattr(self, after_name)
@@ -1595,13 +1642,6 @@ class PingApp:
                 except tk.TclError:
                     pass
                 setattr(self, after_name, None)
-        for chart in list(self.chart_windows):
-            try:
-                chart.close_window()
-            except tk.TclError:
-                continue
-            if chart.winfo_exists():
-                return
         self._close_current_store()
         self.root.destroy()
 

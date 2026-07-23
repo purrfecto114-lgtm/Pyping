@@ -29,7 +29,7 @@ CloseApplications=yes
 RestartApplications=no
 
 [Languages]
-Name: "chinesesimp"; MessagesFile: "packaging\installer\Languages\ChineseSimplified.isl"
+Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]

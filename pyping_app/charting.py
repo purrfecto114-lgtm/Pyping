@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import glob
 import os
-import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, Iterable
 
+from .fileio import atomic_output_path
 from .models import ChartSample, RangeStatistics
 
 
@@ -57,6 +57,8 @@ def calculate_layout(
 def sample_xy(sample: ChartSample, layout: ChartLayout) -> tuple[float, float] | None:
     if sample.latency_ms is None:
         return None
+    if sample.sample_count > 1 and (sample.has_timeout or sample.has_error):
+        return None
     ratio_x = (sample.timestamp.timestamp() - layout.start_ts) / (
         layout.end_ts - layout.start_ts
     )
@@ -92,7 +94,16 @@ def format_latency(value: float | None) -> str:
 def _font_candidates() -> list[str]:
     candidates: list[str] = []
     if sys.platform == "win32":
-        windir = os.environ.get("WINDIR", r"C:\Windows")
+        windir = r"C:\Windows"
+        try:
+            import ctypes
+
+            buffer = ctypes.create_unicode_buffer(32768)
+            length = ctypes.windll.kernel32.GetWindowsDirectoryW(buffer, len(buffer))
+            if 0 < length < len(buffer):
+                windir = buffer.value
+        except (AttributeError, OSError, ValueError):
+            pass
         candidates.extend(
             [
                 os.path.join(windir, "Fonts", "msyh.ttc"),
@@ -111,18 +122,6 @@ def _font_candidates() -> list[str]:
             ]
         )
     else:
-        try:
-            result = subprocess.run(
-                ["fc-match", "-f", "%{file}", "sans:lang=zh-cn"],
-                capture_output=True,
-                text=True,
-                timeout=2,
-                check=False,
-            )
-            if result.stdout.strip():
-                candidates.append(result.stdout.strip())
-        except (OSError, subprocess.SubprocessError):
-            pass
         candidates.extend(
             [
                 "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
@@ -131,7 +130,11 @@ def _font_candidates() -> list[str]:
                 "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
             ]
         )
-        candidates.extend(glob.glob("/usr/share/fonts/**/*NotoSans*CJK*.*", recursive=True))
+        for pattern in (
+            "/usr/share/fonts/opentype/noto/NotoSansCJK*.*",
+            "/usr/share/fonts/truetype/noto/NotoSansCJK*.*",
+        ):
+            candidates.extend(glob.glob(pattern))
     return [path for path in candidates if path and os.path.isfile(path)]
 
 
@@ -155,6 +158,9 @@ def render_chart_png(
 ) -> None:
     from PIL import Image, ImageDraw, ImageFont
 
+    if not (640 <= width <= 4096 and 480 <= height <= 4096) or width * height > 16_000_000:
+        raise ValueError("Chart dimensions are outside the supported range")
+
     image = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(image)
     font_path = find_pillow_font()
@@ -163,7 +169,7 @@ def render_chart_png(
         if font_path:
             try:
                 return ImageFont.truetype(font_path, size=size)
-            except OSError:
+            except (OSError, ValueError):
                 pass
         return ImageFont.load_default()
 
@@ -257,4 +263,5 @@ def render_chart_png(
     if aggregated:
         draw.text((left, height - 38), translations["chart_aggregated"], fill="#8A5A00", font=note_font)
 
-    image.save(path, "PNG")
+    with atomic_output_path(path, suffix=".png.tmp") as temporary:
+        image.save(temporary, "PNG")

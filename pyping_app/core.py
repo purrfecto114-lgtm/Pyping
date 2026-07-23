@@ -10,6 +10,15 @@ import time
 from datetime import datetime
 from typing import Callable, Optional
 
+MAX_ERROR_DETAIL_LENGTH = 1000
+
+
+def safe_error_detail(value: object) -> str:
+    text = str(value).replace("\x00", "")
+    text = " ".join(text.replace("\r", "\n").splitlines())
+    return text[:MAX_ERROR_DETAIL_LENGTH]
+
+
 from .models import (
     PingOutcome,
     PingRecord,
@@ -29,9 +38,9 @@ class PingBackend:
                 module = importlib.import_module("ping3")
                 self._ping = module.ping
             except (ModuleNotFoundError, ImportError) as exc:
-                self.import_error = f"{type(exc).__name__}: {exc}"
+                self.import_error = safe_error_detail(f"{type(exc).__name__}: {exc}")
             except Exception as exc:  # dependency initialization can fail for other reasons
-                self.import_error = f"{type(exc).__name__}: {exc}"
+                self.import_error = safe_error_detail(f"{type(exc).__name__}: {exc}")
 
     @property
     def available(self) -> bool:
@@ -67,38 +76,38 @@ class PingBackend:
                 return PingOutcome(
                     None,
                     ResultStatus.INTERNAL_ERROR,
-                    f"unexpected ping result: {value!r}",
+                    safe_error_detail(f"unexpected ping result: {value!r}"),
                 )
             latency = float(value)
             if not math.isfinite(latency) or latency < 0:
                 return PingOutcome(
                     None,
                     ResultStatus.INTERNAL_ERROR,
-                    f"invalid latency: {value!r}",
+                    safe_error_detail(f"invalid latency: {value!r}"),
                 )
             return PingOutcome(latency, ResultStatus.SUCCESS)
         except PermissionError as exc:
-            return PingOutcome(None, ResultStatus.PERMISSION_ERROR, str(exc))
+            return PingOutcome(None, ResultStatus.PERMISSION_ERROR, safe_error_detail(exc))
         except socket.gaierror as exc:
-            return PingOutcome(None, ResultStatus.RESOLVE_ERROR, str(exc))
+            return PingOutcome(None, ResultStatus.RESOLVE_ERROR, safe_error_detail(exc))
         except OSError as exc:
             text = str(exc).lower()
             if "permission" in text or "operation not permitted" in text:
-                return PingOutcome(None, ResultStatus.PERMISSION_ERROR, str(exc))
-            return PingOutcome(None, ResultStatus.NETWORK_ERROR, str(exc))
+                return PingOutcome(None, ResultStatus.PERMISSION_ERROR, safe_error_detail(exc))
+            return PingOutcome(None, ResultStatus.NETWORK_ERROR, safe_error_detail(exc))
         except Exception as exc:
             name = type(exc).__name__.lower()
             text = str(exc).lower()
             if "timeout" in name or "timeout" in text:
-                return PingOutcome(None, ResultStatus.TIMEOUT, str(exc))
+                return PingOutcome(None, ResultStatus.TIMEOUT, safe_error_detail(exc))
             if "hostunknown" in name or "resolve" in text or "name or service" in text:
-                return PingOutcome(None, ResultStatus.RESOLVE_ERROR, str(exc))
+                return PingOutcome(None, ResultStatus.RESOLVE_ERROR, safe_error_detail(exc))
             if "permission" in name or "permission" in text:
-                return PingOutcome(None, ResultStatus.PERMISSION_ERROR, str(exc))
+                return PingOutcome(None, ResultStatus.PERMISSION_ERROR, safe_error_detail(exc))
             return PingOutcome(
                 None,
                 ResultStatus.INTERNAL_ERROR,
-                f"{type(exc).__name__}: {exc}",
+                safe_error_detail(f"{type(exc).__name__}: {exc}"),
             )
 
 
@@ -172,7 +181,7 @@ def run_ping_session(
                 QueueMessage(
                     config.session_id,
                     "resolve_failed",
-                    f"{type(exc).__name__}: {exc}",
+                    safe_error_detail(f"{type(exc).__name__}: {exc}"),
                 ),
                 stop_event,
                 force=True,
@@ -258,7 +267,7 @@ def run_ping_session(
             QueueMessage(
                 config.session_id,
                 "worker_error",
-                f"{type(exc).__name__}: {exc}",
+                safe_error_detail(f"{type(exc).__name__}: {exc}"),
             ),
             stop_event,
             force=True,

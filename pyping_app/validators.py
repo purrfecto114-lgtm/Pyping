@@ -19,6 +19,8 @@ class ValidationError(ValueError):
 
 
 def parse_host(value: str) -> str:
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+        raise ValidationError("error_host_whitespace")
     host = value.strip()
     if host.startswith("[") and host.endswith("]"):
         host = host[1:-1].strip()

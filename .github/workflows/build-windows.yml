@@ -1,47 +1,214 @@
-name: Build Windows packages
+name: Secure Windows build and release
 
 on:
   workflow_dispatch:
   push:
     tags:
-      - "v*"
+      - "v*.*.*"
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
-    runs-on: windows-latest
+    name: Build without repository write access
+    runs-on: windows-2022
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.metadata.outputs.version }}
     steps:
       - name: Check out source
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
           architecture: "x64"
-          cache: "pip"
 
-      - name: Install Inno Setup
+      - name: Validate version metadata and tag origin
+        id: metadata
         shell: pwsh
-        run: choco install innosetup --yes --no-progress
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          $version = python -c "import pathlib,tomllib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']['version'])"
+          if ($LASTEXITCODE -ne 0) { throw "Unable to read project version" }
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Invalid project version: $version" }
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            if ($env:GITHUB_REF_NAME -ne "v$version") {
+              throw "Tag $env:GITHUB_REF_NAME does not match project version v$version"
+            }
+            git merge-base --is-ancestor $env:GITHUB_SHA "origin/$env:DEFAULT_BRANCH"
+            if ($LASTEXITCODE -ne 0) {
+              throw "Release tag must point to a commit reachable from the default branch"
+            }
+          }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Build and validate release
         shell: pwsh
-        run: ./packaging/build_windows.ps1 -Mode release -RequireInstaller
+        env:
+          PIP_DISABLE_PIP_VERSION_CHECK: "1"
+          PIP_NO_INPUT: "1"
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: ./packaging/build_windows.ps1 -Mode release -RequireInstaller -CI
 
-      - name: Upload packages
-        uses: actions/upload-artifact@v7
+      - name: Verify exact release manifest
+        shell: pwsh
+        run: python tools/verify_release.py --directory release --version "${{ steps.metadata.outputs.version }}" --require-installer
+
+      - name: Upload verified packages
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: Pyping-v0.4.0-Windows-x64
-          path: release/*
+          name: Pyping-v${{ steps.metadata.outputs.version }}-Windows-x64
+          path: |
+            release/Pyping-v${{ steps.metadata.outputs.version }}-Windows-x64-portable.zip
+            release/Pyping-v${{ steps.metadata.outputs.version }}-Windows-x64-onefile.exe
+            release/Pyping-Setup-${{ steps.metadata.outputs.version }}-x64.exe
+            release/release-manifest.json
+            release/SHA256SUMS.txt
           if-no-files-found: error
+          retention-days: 14
 
-      - name: Create GitHub Release and upload assets
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v3
+  publish:
+    name: Publish prebuilt assets only
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified build artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          files: release/*
-          generate_release_notes: true
-          fail_on_unmatched_files: true
+          name: Pyping-v${{ needs.build.outputs.version }}-Windows-x64
+          path: release
+
+      - name: Revalidate artifact and checksums
+        shell: bash
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid version" >&2; exit 1; }
+          [[ "$TAG_NAME" == "v$VERSION" ]] || { echo "Tag/version mismatch" >&2; exit 1; }
+          cd release
+          python - "$VERSION" "$GITHUB_SHA" "$GITHUB_REF" <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import re
+          import sys
+
+          version, source_commit, source_ref = sys.argv[1:4]
+          root = pathlib.Path(".").resolve()
+          payloads = {
+              f"Pyping-v{version}-Windows-x64-portable.zip",
+              f"Pyping-v{version}-Windows-x64-onefile.exe",
+              f"Pyping-Setup-{version}-x64.exe",
+          }
+          expected_directory = payloads | {"release-manifest.json", "SHA256SUMS.txt"}
+          actual_directory = {item.name for item in root.iterdir()}
+          if actual_directory != expected_directory:
+              raise SystemExit(f"unexpected release directory entries: {sorted(actual_directory)}")
+          for item in root.iterdir():
+              if item.is_symlink() or not item.is_file():
+                  raise SystemExit(f"unsafe release entry: {item.name}")
+
+          def digest(path: pathlib.Path) -> str:
+              value = hashlib.sha256()
+              with path.open("rb") as handle:
+                  for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                      value.update(chunk)
+              return value.hexdigest()
+
+          manifest_path = root / "release-manifest.json"
+          checksums_path = root / "SHA256SUMS.txt"
+          for metadata_path in (manifest_path, checksums_path):
+              if metadata_path.stat().st_size > 1024 * 1024:
+                  raise SystemExit(f"release metadata is unexpectedly large: {metadata_path.name}")
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          if (
+              manifest.get("schema"),
+              manifest.get("application"),
+              manifest.get("version"),
+              manifest.get("platform"),
+              manifest.get("source_commit"),
+              manifest.get("source_ref"),
+          ) != (1, "Pyping GUI", version, "windows-x64", source_commit, source_ref):
+              raise SystemExit("manifest identity/source mismatch")
+          entries = manifest.get("files")
+          if (
+              not isinstance(entries, list)
+              or len(entries) != len(payloads)
+              or any(not isinstance(entry, dict) for entry in entries)
+              or {entry.get("name") for entry in entries} != payloads
+          ):
+              raise SystemExit("manifest payload set mismatch")
+          for entry in entries:
+              name = entry.get("name")
+              if not isinstance(name, str) or pathlib.Path(name).name != name:
+                  raise SystemExit("unsafe manifest file name")
+              path = root / name
+              expected_size = entry.get("size")
+              if (
+                  isinstance(expected_size, bool)
+                  or not isinstance(expected_size, int)
+                  or expected_size < 0
+                  or expected_size != path.stat().st_size
+                  or entry.get("sha256") != digest(path)
+              ):
+                  raise SystemExit(f"manifest verification failed: {name}")
+
+          checksum_values = {}
+          checksum_re = re.compile(r"^[0-9a-f]{64}$")
+          for line_number, line in enumerate(checksums_path.read_text(encoding="ascii").splitlines(), 1):
+              parts = line.split("  ", 1)
+              if len(parts) != 2 or not checksum_re.fullmatch(parts[0]):
+                  raise SystemExit(f"invalid checksum line {line_number}")
+              name = parts[1]
+              if pathlib.Path(name).name != name or name in checksum_values:
+                  raise SystemExit(f"unsafe checksum name: {name!r}")
+              checksum_values[name] = parts[0]
+          expected_checksums = payloads | {"release-manifest.json"}
+          if set(checksum_values) != expected_checksums:
+              raise SystemExit("checksum payload set mismatch")
+          for name, expected_hash in checksum_values.items():
+              if digest(root / name) != expected_hash:
+                  raise SystemExit(f"checksum mismatch: {name}")
+          print("independent release verification: OK")
+          PY
+
+      - name: Create GitHub release from exact files
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.build.outputs.version }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          files=(
+            "release/Pyping-v${VERSION}-Windows-x64-portable.zip"
+            "release/Pyping-v${VERSION}-Windows-x64-onefile.exe"
+            "release/Pyping-Setup-${VERSION}-x64.exe"
+            "release/release-manifest.json"
+            "release/SHA256SUMS.txt"
+          )
+          gh release create "$TAG_NAME" "${files[@]}" \
+            --verify-tag \
+            --generate-notes \
+            --title "$TAG_NAME"
