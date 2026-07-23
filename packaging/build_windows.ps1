@@ -403,7 +403,8 @@ switch ($Mode) {
     "release" {
         Build-OneDir
         Build-OneFile
-        $installerBuilt = Build-Installer -Required:$RequireInstaller
+        Build-Installer -Required:$RequireInstaller | Out-Null
+        $installerBuilt = Test-Path -LiteralPath (Join-Path $ReleaseDir "Pyping-Setup-$script:ProjectVersion-x64.exe") -PathType Leaf
         Publish-ReleaseFiles -InstallerBuilt:$installerBuilt
     }
 }
