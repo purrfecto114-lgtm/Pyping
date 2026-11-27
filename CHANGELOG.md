@@ -59,7 +59,11 @@
 - The minimum Python version is now 3.11 everywhere (packaging metadata,
   build script discovery, docs); the 3.10 claim was dropped because the
   validation toolchain imports `tomllib`, which is 3.11+.
-- CI now covers macOS and runs the GUI smoke test under Xvfb on Linux.
+- CI now runs the GUI smoke test under Xvfb on Linux (and directly on
+  Windows).  macOS CI was attempted but the account's GitHub plan does not
+  currently support macOS runners (jobs fail with "configuration not
+  supported"), so it is not included until that changes; macOS remains an
+  untested-by-CI target.
 
 ## v0.4.0
 

@@ -34,7 +34,7 @@ Pyping 是一个基于 Python、Tkinter 与 `ping3` 的跨平台 Ping 桌面工�
 
 - 最低 Python 版本统一为 3.11（校验工具链依赖 `tomllib`）。
 - ICMP 负载统一 8 字节下限（ICMP 时间戳占用前 8 字节），各后端请求与实际包大小一致。
-- CI 新增 macOS 与 Linux 下的 GUI 冒烟测试。
+- CI 新增 Linux 下的 GUI 冒烟测试（Xvfb）；macOS runner 当前计划不可用，暂未纳入 CI。
 
 ## v0.4.0 主要变化
 
