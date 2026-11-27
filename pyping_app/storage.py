@@ -9,11 +9,197 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
+from .events import FailureEvent, FailureEventRow
 from .fileio import atomic_output_path, normalize_output_path, spreadsheet_safe_text
 from .models import ChartSample, PingRecord, RangeStatistics, ResultStatus
 
 MAX_CHART_POINTS = 50_000
 MAX_RECORD_DETAIL_LENGTH = 1000
+MAX_FAILURE_EVENTS = 100_000
+
+_STATUS_VALUES = (
+    "success",
+    "timeout",
+    "resolve_error",
+    "permission_error",
+    "network_error",
+    "internal_error",
+    "missing_dependency",
+    "cancelled",
+)
+
+
+def _range_statistics_query() -> str:
+    # Cancelled probes carry no network evidence: they are counted, but
+    # excluded from the ICMP-unanswered / error buckets and from rates.
+    return """
+        SELECT
+            COUNT(*),
+            SUM(CASE WHEN status = ? THEN 1 ELSE 0 END),
+            SUM(CASE WHEN status = ? THEN 1 ELSE 0 END),
+            SUM(CASE WHEN status NOT IN (?, ?, ?) THEN 1 ELSE 0 END),
+            SUM(CASE WHEN status = ? THEN 1 ELSE 0 END),
+            AVG(CASE WHEN status = ? THEN latency END),
+            MIN(CASE WHEN status = ? THEN latency END),
+            MAX(CASE WHEN status = ? THEN latency END)
+        FROM records
+        WHERE wall_ts >= ? AND wall_ts < ?
+    """
+
+
+def _range_statistics_params(start_ts: float, end_ts: float) -> tuple:
+    success = ResultStatus.SUCCESS.value
+    timeout = ResultStatus.TIMEOUT.value
+    cancelled = ResultStatus.CANCELLED.value
+    return (
+        success,
+        timeout,
+        success,
+        timeout,
+        cancelled,
+        cancelled,
+        success,
+        success,
+        success,
+        start_ts,
+        end_ts,
+    )
+
+
+def _range_statistics_from_row(row) -> RangeStatistics:
+    return RangeStatistics(
+        total=int(row[0] or 0),
+        success=int(row[1] or 0),
+        timeout=int(row[2] or 0),
+        errors=int(row[3] or 0),
+        cancelled=int(row[4] or 0),
+        average_latency=float(row[5]) if row[5] is not None else None,
+        min_latency=float(row[6]) if row[6] is not None else None,
+        max_latency=float(row[7]) if row[7] is not None else None,
+    )
+
+
+def _chart_samples_on(
+    connection: sqlite3.Connection,
+    start_ts: float,
+    end_ts: float,
+    *,
+    max_points: int,
+) -> tuple[list[ChartSample], bool, int]:
+    success = ResultStatus.SUCCESS.value
+    timeout = ResultStatus.TIMEOUT.value
+    cancelled = ResultStatus.CANCELLED.value
+    count = int(
+        connection.execute(
+            "SELECT COUNT(*) FROM records WHERE wall_ts >= ? AND wall_ts < ?",
+            (start_ts, end_ts),
+        ).fetchone()[0]
+    )
+    if count <= max_points:
+        rows = connection.execute(
+            """
+            SELECT wall_ts, latency, status
+            FROM records
+            WHERE wall_ts >= ? AND wall_ts < ?
+            ORDER BY sequence
+            """,
+            (start_ts, end_ts),
+        ).fetchall()
+        samples = [
+            ChartSample(
+                timestamp=datetime.fromtimestamp(row[0]),
+                latency_ms=float(row[1]) if row[1] is not None else None,
+                status=ResultStatus(row[2]),
+                timeout_count=1 if row[2] == timeout else 0,
+                error_count=(
+                    1
+                    if row[2] not in (success, timeout, cancelled)
+                    else 0
+                ),
+            )
+            for row in rows
+        ]
+        return samples, False, count
+
+    span = max(end_ts - start_ts, 0.001)
+    bucket_width = span / max_points
+    # Each bucket keeps the success-avg latency together with success min/max,
+    # so long sessions with a few failures still expose the latency envelope
+    # instead of hiding every mixed bucket.
+    rows = connection.execute(
+        """
+        SELECT
+            AVG(wall_ts) AS avg_ts,
+            AVG(CASE WHEN status = ? THEN latency END) AS avg_latency,
+            MIN(CASE WHEN status = ? THEN latency END) AS min_latency,
+            MAX(CASE WHEN status = ? THEN latency END) AS max_latency,
+            SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) AS timeout_count,
+            SUM(CASE WHEN status NOT IN (?, ?, ?) THEN 1 ELSE 0 END) AS error_count,
+            COUNT(*) AS sample_count
+        FROM records
+        WHERE wall_ts >= ? AND wall_ts < ?
+        GROUP BY CAST(MIN((wall_ts - ?) / ?, ?) AS INTEGER)
+        ORDER BY avg_ts
+        """,
+        (
+            success,
+            success,
+            success,
+            timeout,
+            success,
+            timeout,
+            cancelled,
+            start_ts,
+            end_ts,
+            start_ts,
+            bucket_width,
+            max_points - 1,
+        ),
+    ).fetchall()
+
+    samples: list[ChartSample] = []
+    for row in rows:
+        (
+            avg_ts,
+            latency,
+            latency_min,
+            latency_max,
+            timeout_count,
+            error_count,
+            sample_count,
+        ) = row
+        timeout_count = int(timeout_count or 0)
+        error_count = int(error_count or 0)
+        if latency is not None:
+            status = ResultStatus.SUCCESS
+        elif timeout_count:
+            status = ResultStatus.TIMEOUT
+        else:
+            status = ResultStatus.NETWORK_ERROR
+        samples.append(
+            ChartSample(
+                timestamp=datetime.fromtimestamp(avg_ts),
+                latency_ms=float(latency) if latency is not None else None,
+                status=status,
+                timeout_count=timeout_count,
+                error_count=error_count,
+                sample_count=int(sample_count),
+                latency_min=float(latency_min) if latency_min is not None else None,
+                latency_max=float(latency_max) if latency_max is not None else None,
+            )
+        )
+    return samples, True, count
+
+
+def _range_statistics_on(
+    connection: sqlite3.Connection,
+    start_ts: float,
+    end_ts: float,
+) -> RangeStatistics:
+    row = connection.execute(
+        _range_statistics_query(), _range_statistics_params(start_ts, end_ts)
+    ).fetchone()
+    return _range_statistics_from_row(row)
 
 
 class SessionStore:
@@ -33,7 +219,8 @@ class SessionStore:
                 latency REAL CHECK(latency IS NULL OR latency >= 0),
                 status TEXT NOT NULL CHECK(status IN (
                     'success', 'timeout', 'resolve_error', 'permission_error',
-                    'network_error', 'internal_error', 'missing_dependency'
+                    'network_error', 'internal_error', 'missing_dependency',
+                    'cancelled'
                 )),
                 detail TEXT NOT NULL CHECK(length(detail) <= {MAX_RECORD_DETAIL_LENGTH}),
                 CHECK(
@@ -44,6 +231,27 @@ class SessionStore:
             """
         )
         self._conn.execute("CREATE INDEX idx_records_wall_ts ON records(wall_ts)")
+        self._conn.execute(
+            f"""
+            CREATE TABLE failure_events (
+                event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind TEXT NOT NULL CHECK(kind IN ('network', 'local')),
+                status TEXT NOT NULL CHECK(length(status) <= 32),
+                first_failure_seq INTEGER NOT NULL,
+                first_failure_ts REAL NOT NULL,
+                last_failure_seq INTEGER NOT NULL,
+                last_failure_ts REAL NOT NULL,
+                first_recovery_seq INTEGER,
+                first_recovery_ts REAL,
+                timeout_count INTEGER NOT NULL DEFAULT 0 CHECK(timeout_count >= 0),
+                error_count INTEGER NOT NULL DEFAULT 0 CHECK(error_count >= 0),
+                recovered INTEGER NOT NULL DEFAULT 0 CHECK(recovered IN (0, 1))
+            )
+            """
+        )
+        self._conn.execute(
+            "CREATE INDEX idx_events_first_failure_ts ON failure_events(first_failure_ts)"
+        )
         self._conn.commit()
         self._closed = False
 
@@ -72,6 +280,71 @@ class SessionStore:
                 raise
         return len(rows)
 
+    def insert_event(self, event: FailureEvent) -> int:
+        with self._lock:
+            cursor = self._conn.execute(
+                """
+                INSERT INTO failure_events (
+                    kind, status, first_failure_seq, first_failure_ts,
+                    last_failure_seq, last_failure_ts, first_recovery_seq,
+                    first_recovery_ts, timeout_count, error_count, recovered
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event.kind,
+                    event.status,
+                    event.first_failure_seq,
+                    event.first_failure_ts.timestamp(),
+                    event.last_failure_seq,
+                    event.last_failure_ts.timestamp(),
+                    event.first_recovery_seq,
+                    (
+                        event.first_recovery_ts.timestamp()
+                        if event.first_recovery_ts is not None
+                        else None
+                    ),
+                    event.timeout_count,
+                    event.error_count,
+                    1 if event.recovered else 0,
+                ),
+            )
+            self._conn.commit()
+            return int(cursor.lastrowid)
+
+    def failure_events(self, *, limit: int = 500) -> list[FailureEventRow]:
+        """Newest failure events first, bounded so the UI never loads unbounded rows."""
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT event_id, kind, status, first_failure_seq, first_failure_ts,
+                       last_failure_seq, last_failure_ts, first_recovery_seq,
+                       first_recovery_ts, timeout_count, error_count, recovered
+                FROM failure_events
+                ORDER BY first_failure_ts DESC, event_id DESC
+                LIMIT ?
+                """,
+                (max(1, min(limit, MAX_FAILURE_EVENTS)),),
+            ).fetchall()
+        return [
+            FailureEventRow(
+                event_id=int(row[0]),
+                kind=str(row[1]),
+                status=str(row[2]),
+                first_failure_seq=int(row[3]),
+                first_failure_ts=datetime.fromtimestamp(row[4]),
+                last_failure_seq=int(row[5]),
+                last_failure_ts=datetime.fromtimestamp(row[6]),
+                first_recovery_seq=int(row[7]) if row[7] is not None else None,
+                first_recovery_ts=(
+                    datetime.fromtimestamp(row[8]) if row[8] is not None else None
+                ),
+                timeout_count=int(row[9]),
+                error_count=int(row[10]),
+                recovered=bool(row[11]),
+            )
+            for row in rows
+        ]
+
     def count(self) -> int:
         with self._lock:
             row = self._conn.execute("SELECT COUNT(*) FROM records").fetchone()
@@ -87,42 +360,45 @@ class SessionStore:
         return datetime.fromtimestamp(row[0]), datetime.fromtimestamp(row[1])
 
     def range_statistics(self, start: datetime, end: datetime) -> RangeStatistics:
-        start_ts, end_ts = start.timestamp(), end.timestamp()
         with self._lock:
-            row = self._conn.execute(
-                """
-                SELECT
-                    COUNT(*),
-                    SUM(CASE WHEN status = ? THEN 1 ELSE 0 END),
-                    SUM(CASE WHEN status = ? THEN 1 ELSE 0 END),
-                    SUM(CASE WHEN status NOT IN (?, ?) THEN 1 ELSE 0 END),
-                    AVG(CASE WHEN status = ? THEN latency END),
-                    MIN(CASE WHEN status = ? THEN latency END),
-                    MAX(CASE WHEN status = ? THEN latency END)
-                FROM records
-                WHERE wall_ts BETWEEN ? AND ?
-                """,
-                (
-                    ResultStatus.SUCCESS.value,
-                    ResultStatus.TIMEOUT.value,
-                    ResultStatus.SUCCESS.value,
-                    ResultStatus.TIMEOUT.value,
-                    ResultStatus.SUCCESS.value,
-                    ResultStatus.SUCCESS.value,
-                    ResultStatus.SUCCESS.value,
-                    start_ts,
-                    end_ts,
-                ),
-            ).fetchone()
-        return RangeStatistics(
-            total=int(row[0] or 0),
-            success=int(row[1] or 0),
-            timeout=int(row[2] or 0),
-            errors=int(row[3] or 0),
-            average_latency=float(row[4]) if row[4] is not None else None,
-            min_latency=float(row[5]) if row[5] is not None else None,
-            max_latency=float(row[6]) if row[6] is not None else None,
-        )
+            stats = _range_statistics_on(
+                self._conn, start.timestamp(), end.timestamp()
+            )
+        return stats
+
+    def chart_snapshot(
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        max_points: int = 5000,
+    ) -> tuple[RangeStatistics, list[ChartSample], bool, int]:
+        """Take statistics, chart samples and counts from one read-only snapshot.
+
+        A short-lived read-only connection keeps long aggregation queries off
+        the GUI writer connection entirely: under WAL the writer stays
+        responsive, and the snapshot is taken in a single transaction so
+        statistics and samples always describe the same data.  The transaction
+        is released immediately so WAL checkpoints are not blocked.
+        """
+        if not 1 <= max_points <= MAX_CHART_POINTS:
+            raise ValueError(
+                f"max_points must be between 1 and {MAX_CHART_POINTS}"
+            )
+        start_ts, end_ts = start.timestamp(), end.timestamp()
+        database_uri = Path(self.path).resolve().as_uri() + "?mode=ro"
+        connection = sqlite3.connect(database_uri, uri=True)
+        try:
+            connection.execute("PRAGMA query_only=ON")
+            connection.execute("BEGIN")
+            stats = _range_statistics_on(connection, start_ts, end_ts)
+            samples, aggregated, count = _chart_samples_on(
+                connection, start_ts, end_ts, max_points=max_points
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        return stats, samples, aggregated, count
 
     def chart_samples(
         self,
@@ -135,93 +411,11 @@ class SessionStore:
             raise ValueError(
                 f"max_points must be between 1 and {MAX_CHART_POINTS}"
             )
-        start_ts, end_ts = start.timestamp(), end.timestamp()
         with self._lock:
-            count = int(
-                self._conn.execute(
-                    "SELECT COUNT(*) FROM records WHERE wall_ts BETWEEN ? AND ?",
-                    (start_ts, end_ts),
-                ).fetchone()[0]
+            samples, aggregated, count = _chart_samples_on(
+                self._conn, start.timestamp(), end.timestamp(), max_points=max_points
             )
-            if count <= max_points:
-                rows = self._conn.execute(
-                    """
-                    SELECT wall_ts, latency, status
-                    FROM records
-                    WHERE wall_ts BETWEEN ? AND ?
-                    ORDER BY sequence
-                    """,
-                    (start_ts, end_ts),
-                ).fetchall()
-                samples = [
-                    ChartSample(
-                        timestamp=datetime.fromtimestamp(row[0]),
-                        latency_ms=float(row[1]) if row[1] is not None else None,
-                        status=ResultStatus(row[2]),
-                        timeout_count=1 if row[2] == ResultStatus.TIMEOUT.value else 0,
-                        error_count=(
-                            1
-                            if row[2]
-                            not in (
-                                ResultStatus.SUCCESS.value,
-                                ResultStatus.TIMEOUT.value,
-                            )
-                            else 0
-                        ),
-                    )
-                    for row in rows
-                ]
-                return samples, False, count
-
-            span = max(end_ts - start_ts, 0.001)
-            bucket_width = span / max_points
-            rows = self._conn.execute(
-                """
-                SELECT
-                    AVG(wall_ts) AS avg_ts,
-                    AVG(CASE WHEN status = ? THEN latency END) AS avg_latency,
-                    SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) AS timeout_count,
-                    SUM(CASE WHEN status NOT IN (?, ?) THEN 1 ELSE 0 END) AS error_count,
-                    COUNT(*) AS sample_count
-                FROM records
-                WHERE wall_ts BETWEEN ? AND ?
-                GROUP BY CAST(MIN((wall_ts - ?) / ?, ?) AS INTEGER)
-                ORDER BY avg_ts
-                """,
-                (
-                    ResultStatus.SUCCESS.value,
-                    ResultStatus.TIMEOUT.value,
-                    ResultStatus.SUCCESS.value,
-                    ResultStatus.TIMEOUT.value,
-                    start_ts,
-                    end_ts,
-                    start_ts,
-                    bucket_width,
-                    max_points - 1,
-                ),
-            ).fetchall()
-
-        samples: list[ChartSample] = []
-        for avg_ts, latency, timeout_count, error_count, sample_count in rows:
-            timeout_count = int(timeout_count or 0)
-            error_count = int(error_count or 0)
-            if latency is not None:
-                status = ResultStatus.SUCCESS
-            elif timeout_count:
-                status = ResultStatus.TIMEOUT
-            else:
-                status = ResultStatus.NETWORK_ERROR
-            samples.append(
-                ChartSample(
-                    timestamp=datetime.fromtimestamp(avg_ts),
-                    latency_ms=float(latency) if latency is not None else None,
-                    status=status,
-                    timeout_count=timeout_count,
-                    error_count=error_count,
-                    sample_count=int(sample_count),
-                )
-            )
-        return samples, True, count
+        return samples, aggregated, count
 
     def export_csv(
         self,
@@ -260,7 +454,7 @@ class SessionStore:
             clauses.append("wall_ts >= ?")
             params.append(start.timestamp())
         if end is not None:
-            clauses.append("wall_ts <= ?")
+            clauses.append("wall_ts < ?")
             params.append(end.timestamp())
         if clauses:
             query += " WHERE " + " AND ".join(clauses)

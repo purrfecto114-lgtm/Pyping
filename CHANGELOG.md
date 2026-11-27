@@ -1,5 +1,66 @@
 # Changelog
 
+## v0.5.0
+
+### Reliability and measurement correctness
+
+- Skipped missed send slots instead of replaying them: a slow probe no longer
+  triggers an immediate catch-up burst, and the schedule stays on its
+  monotonic-clock grid.
+- Stopping a session no longer drops the result of the probe that was already
+  in flight; it is recorded as an explicit `cancelled` entry (result unknown)
+  and excluded from failure-rate statistics instead of silently disappearing
+  or being counted as a timeout.
+- IPv6 link-local interface scopes (for example `fe80::1%7`) survive target
+  resolution into the backend call.
+- ping3 exceptions are now classified by exception type with the module-level
+  EXCEPTIONS flag set once at adapter init, keeping ICMP type/code details and
+  the responding source address in the record instead of compressing them to
+  "returned False".
+
+### System ping fallback
+
+- Added a system-ping backend (Windows `ping.exe`, Linux iputils/BusyBox-style
+  `ping`, macOS `ping`/`ping6`) used only when the ping3 backend cannot run at
+  all (missing dependency, insufficient privileges). Ordinary timeouts and
+  unreachables never trigger a backend switch, so sampling stays comparable.
+- The switch happens once per session, is logged with its reason, and every
+  real send is counted exactly once. Child processes use argument arrays with
+  no shell and inherit a cleaned library search path under PyInstaller.
+- Success requires real echo-reply evidence (failure text is checked before
+  the exit code, because Windows `ping.exe` can exit 0 after total loss).
+- The in-flight system ping process is cancelled promptly on stop.
+
+### Failure events and the failure-event browser
+
+- New incremental failure-event detector (single pass over the record stream,
+  no rescans): consecutive failures merge into network events; resolver /
+  permission / dependency errors become separate local-tool events and never
+  masquerade as network failures.
+- "Select chart time range" dialog gained a failure-events page; picking an
+  event and a ±30 s / ±1 min / ±5 min window charts the period around the
+  observed event span, clamped to the session bounds. Unrecovered and
+  interrupted events are marked honestly (a stop is an observation boundary,
+  not a recovery time).
+
+### Chart queries and rendering
+
+- Chart statistics and aggregation moved off the GUI thread onto a
+  short-lived read-only WAL snapshot connection with session-identity guards,
+  so million-row sessions no longer block the interface and stale queries can
+  never populate a newer session.
+- Aggregated buckets keep the success-avg latency plus a min/max envelope:
+  mixed buckets no longer hide the latency curve (the 99.5%-success session
+  now still shows latency), and pure-failure buckets still break the line.
+- The time axis includes dates whenever the range spans midnight.
+
+### Compatibility and toolchain
+
+- The minimum Python version is now 3.11 everywhere (packaging metadata,
+  build script discovery, docs); the 3.10 claim was dropped because the
+  validation toolchain imports `tomllib`, which is 3.11+.
+- CI now covers macOS and runs the GUI smoke test under Xvfb on Linux.
+
 ## v0.4.0
 
 ### Security hardening update (version unchanged)

@@ -15,6 +15,11 @@ class ResultStatus(str, Enum):
     NETWORK_ERROR = "network_error"
     INTERNAL_ERROR = "internal_error"
     MISSING_DEPENDENCY = "missing_dependency"
+    # A probe that was started but whose result is unknown because the user
+    # asked to stop.  Cancelled probes are recorded (never silently dropped)
+    # but they are not network failures: they carry no evidence about the
+    # target path and are excluded from failure rates.
+    CANCELLED = "cancelled"
 
 
 @dataclass(frozen=True)
@@ -70,6 +75,7 @@ class RunStatistics:
     success: int = 0
     timeout: int = 0
     errors: int = 0
+    cancelled: int = 0
     latency_sum: float = 0.0
     min_latency: Optional[float] = None
     max_latency: Optional[float] = None
@@ -91,8 +97,14 @@ class RunStatistics:
             )
         elif record.status == ResultStatus.TIMEOUT:
             self.timeout += 1
+        elif record.status == ResultStatus.CANCELLED:
+            self.cancelled += 1
         else:
             self.errors += 1
+
+    @property
+    def measured(self) -> int:
+        return self.total - self.cancelled
 
     @property
     def failed(self) -> int:
@@ -100,7 +112,9 @@ class RunStatistics:
 
     @property
     def failure_rate(self) -> float:
-        return (self.failed / self.total * 100.0) if self.total else 0.0
+        # Cancelled probes carry no evidence about the network path, so they
+        # are excluded from both the numerator and the denominator.
+        return (self.failed / self.measured * 100.0) if self.measured else 0.0
 
     @property
     def average_latency(self) -> Optional[float]:
@@ -116,6 +130,11 @@ class RangeStatistics:
     average_latency: Optional[float]
     min_latency: Optional[float]
     max_latency: Optional[float]
+    cancelled: int = 0
+
+    @property
+    def measured(self) -> int:
+        return self.total - self.cancelled
 
     @property
     def failed(self) -> int:
@@ -123,7 +142,8 @@ class RangeStatistics:
 
     @property
     def failure_rate(self) -> float:
-        return (self.failed / self.total * 100.0) if self.total else 0.0
+        # Cancelled probes carry no evidence about the network path.
+        return (self.failed / self.measured * 100.0) if self.measured else 0.0
 
 
 @dataclass(frozen=True)
@@ -134,6 +154,8 @@ class ChartSample:
     timeout_count: int = 0
     error_count: int = 0
     sample_count: int = 1
+    latency_min: Optional[float] = None
+    latency_max: Optional[float] = None
 
     @property
     def has_timeout(self) -> bool:
@@ -141,7 +163,10 @@ class ChartSample:
 
     @property
     def has_error(self) -> bool:
-        return self.error_count > 0 or self.status not in (
-            ResultStatus.SUCCESS,
-            ResultStatus.TIMEOUT,
+        return self.error_count > 0 or (
+            self.status not in (
+                ResultStatus.SUCCESS,
+                ResultStatus.TIMEOUT,
+                ResultStatus.CANCELLED,
+            )
         )

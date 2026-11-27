@@ -4,6 +4,11 @@ import math
 
 MAX_HOST_LENGTH = 253
 MAX_PACKET_SIZE = 65500
+# ICMP echo headers embed an 8-byte timestamp; ping3 (the primary backend)
+# always sends at least 8 payload bytes regardless of the requested size.
+# Enforcing the same floor for every backend keeps requested and actual
+# payload sizes identical, so switching backends never changes the probe.
+MIN_PACKET_SIZE = 8
 MAX_INTERVAL_SECONDS = 86400.0
 MAX_TIMEOUT_SECONDS = 300.0
 MAX_COUNT = 10_000_000
@@ -46,6 +51,8 @@ def parse_packet_size(value: str) -> int:
     size = parse_integer(value, "error_size", "error_size_int")
     if size <= 0:
         raise ValidationError("error_size_positive")
+    if size < MIN_PACKET_SIZE:
+        raise ValidationError("error_size_too_small")
     if size > MAX_PACKET_SIZE:
         raise ValidationError("error_size_too_large")
     return size

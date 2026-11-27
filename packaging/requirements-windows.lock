@@ -1,4 +1,4 @@
-# Reproducible Windows x64 build lock for Python 3.10-3.13.
+# Reproducible Windows x64 build lock for Python 3.11-3.13.
 # Regenerate only after reviewing upstream release notes and hashes from PyPI.
 ping3==5.1.5 \
     --hash=sha256:9503164d054b87b01a6bd0df83a49c29e7c8427eb06940f874ebd4ed2d8ba8f6

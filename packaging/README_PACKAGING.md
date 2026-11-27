@@ -1,4 +1,4 @@
-# Pyping v0.4.0 Windows 安全打包说明
+# Pyping v0.5.0 Windows 安全打包说明
 
 ## 推荐产物
 
@@ -6,9 +6,9 @@
 
 - `dist\Pyping\`：PyInstaller onedir；
 - `dist-onefile\Pyping.exe`：单 EXE 便携版；
-- `release\Pyping-v0.4.0-Windows-x64-portable.zip`；
-- `release\Pyping-v0.4.0-Windows-x64-onefile.exe`；
-- `release\Pyping-Setup-0.4.0-x64.exe`：存在 Inno Setup 时生成；
+- `release\Pyping-v0.5.0-Windows-x64-portable.zip`；
+- `release\Pyping-v0.5.0-Windows-x64-onefile.exe`；
+- `release\Pyping-Setup-0.5.0-x64.exe`：存在 Inno Setup 时生成；
 - `release\release-manifest.json`：文件名、大小和 SHA-256；
 - `release\SHA256SUMS.txt`：所有可发布文件的独立校验值。
 
@@ -17,10 +17,10 @@
 ## 系统要求
 
 - Windows 10/11 x64；
-- 64 位 Python 3.10–3.13；
+- 64 位 Python 3.11–3.13；
 - Inno Setup 6/7，仅安装器需要。
 
-脚本拒绝 32 位 Python。它依次尝试 Python Launcher 的 3.13、3.12、3.11、3.10 x64，再尝试 `python` 与 `python3`。
+脚本拒绝 32 位 Python。它依次尝试 Python Launcher 的 3.13、3.12、3.11 x64，再尝试 `python` 与 `python3`。
 
 ## 一键发布构建
 
@@ -76,7 +76,7 @@ powershell -NoLogo -NoProfile -File packaging\build_windows.ps1 -Mode release -R
 packaging\requirements-windows.lock
 ```
 
-该文件完整固定运行时和 PyInstaller 传递依赖，并列出 Python 3.10–3.13 Windows x64 wheel 的 SHA-256。构建命令使用：
+该文件完整固定运行时和 PyInstaller 传递依赖，并列出 Python 3.11–3.13 Windows x64 wheel 的 SHA-256。构建命令使用：
 
 - `--require-hashes`；
 - `--force-reinstall`；

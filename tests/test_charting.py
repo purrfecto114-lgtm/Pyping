@@ -27,7 +27,9 @@ class ChartingTests(unittest.TestCase):
         self.assertEqual(len(segments), 2)
         self.assertEqual([len(segment) for segment in segments], [1, 1])
 
-    def test_aggregated_bucket_with_failures_breaks_latency_line(self) -> None:
+    def test_mixed_bucket_keeps_latency_but_pure_failure_breaks_line(self) -> None:
+        # Mixed buckets (success + failures) must keep their average latency
+        # visible; only buckets without any successful probe break the line.
         start = datetime.now()
         samples = [
             ChartSample(start, 10.0, ResultStatus.SUCCESS),
@@ -38,11 +40,34 @@ class ChartingTests(unittest.TestCase):
                 timeout_count=1,
                 sample_count=4,
             ),
-            ChartSample(start + timedelta(seconds=2), 20.0, ResultStatus.SUCCESS),
+            ChartSample(
+                start + timedelta(seconds=2),
+                None,
+                ResultStatus.TIMEOUT,
+                timeout_count=4,
+                sample_count=4,
+            ),
+            ChartSample(start + timedelta(seconds=3), 20.0, ResultStatus.SUCCESS),
         ]
         layout = calculate_layout(samples, 800, 500, left=50, right=50, top=50, bottom=50)
         segments = build_line_segments(samples, lambda sample: sample_xy(sample, layout))
-        self.assertEqual([len(segment) for segment in segments], [1, 1])
+        self.assertEqual([len(segment) for segment in segments], [2, 1])
+
+    def test_layout_scales_to_bucket_max_envelope(self) -> None:
+        start = datetime.now()
+        samples = [
+            ChartSample(start, 10.0, ResultStatus.SUCCESS),
+            ChartSample(
+                start + timedelta(seconds=1),
+                15.0,
+                ResultStatus.SUCCESS,
+                sample_count=10,
+                latency_min=12.0,
+                latency_max=800.0,
+            ),
+        ]
+        layout = calculate_layout(samples, 800, 500, left=50, right=50, top=50, bottom=50)
+        self.assertGreaterEqual(layout.max_latency, 800.0)
 
 
 class PngRenderTests(unittest.TestCase):

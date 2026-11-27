@@ -24,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-2022]
+        os: [ubuntu-24.04, windows-2022, macos-14]
         python: ["3.11", "3.12", "3.13"]
     steps:
       - name: Check out source
@@ -47,3 +47,17 @@ jobs:
         run: |
           python -m unittest discover -s tests -p "test_*.py" -v
           python tools/validate_project.py
+
+      - name: Install Xvfb (Linux GUI smoke)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb
+
+      - name: GUI smoke test (Linux, Xvfb)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a python tests/gui_smoke.py
+
+      - name: GUI smoke test (Windows / macOS)
+        if: runner.os != 'Linux'
+        run: python tests/gui_smoke.py

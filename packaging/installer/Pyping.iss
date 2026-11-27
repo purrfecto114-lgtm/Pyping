@@ -1,5 +1,5 @@
 #define MyAppName "Pyping GUI"
-#define MyAppVersion "0.4.0"
+#define MyAppVersion "0.5.0"
 #define MyAppPublisher "Pyping contributors"
 #define MyAppExeName "Pyping.exe"
 #define ProjectRoot AddBackslash(SourcePath) + "..\.."

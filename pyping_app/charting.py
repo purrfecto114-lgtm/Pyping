@@ -32,7 +32,12 @@ def calculate_layout(
     top: int,
     bottom: int,
 ) -> ChartLayout:
-    valid = [s.latency_ms for s in samples if s.latency_ms is not None]
+    valid: list[float] = []
+    for sample in samples:
+        if sample.latency_ms is not None:
+            valid.append(sample.latency_ms)
+        if sample.latency_max is not None:
+            valid.append(sample.latency_max)
     max_latency = max(valid) * 1.2 if valid else 1.0
     max_latency = max(max_latency, 1.0)
     if samples:
@@ -57,8 +62,9 @@ def calculate_layout(
 def sample_xy(sample: ChartSample, layout: ChartLayout) -> tuple[float, float] | None:
     if sample.latency_ms is None:
         return None
-    if sample.sample_count > 1 and (sample.has_timeout or sample.has_error):
-        return None
+    # Mixed buckets (success + failure) keep their average latency visible:
+    # hiding them erased the latency curve for 99%+ success long sessions.
+    # Failures remain visible as X / ! marks and break the line segments.
     ratio_x = (sample.timestamp.timestamp() - layout.start_ts) / (
         layout.end_ts - layout.start_ts
     )
@@ -66,6 +72,35 @@ def sample_xy(sample: ChartSample, layout: ChartLayout) -> tuple[float, float] |
     x = layout.x0 + ratio_x * (layout.x1 - layout.x0)
     y = layout.y0 - ratio_y * (layout.y0 - layout.y1)
     return x, y
+
+
+def sample_envelope_xy(
+    sample: ChartSample, layout: ChartLayout
+) -> tuple[float, float, float] | None:
+    """Vertical min/max latency envelope for one aggregated sample.
+
+    Returns (x, y_min, y_max), or None when the sample has no latency
+    envelope (raw points or buckets without any successful probe).
+    """
+    if sample.latency_min is None or sample.latency_max is None:
+        return None
+    ratio_x = (sample.timestamp.timestamp() - layout.start_ts) / (
+        layout.end_ts - layout.start_ts
+    )
+    x = layout.x0 + ratio_x * (layout.x1 - layout.x0)
+    y_max = layout.y0 - (sample.latency_max / layout.max_latency) * (layout.y0 - layout.y1)
+    y_min = layout.y0 - (sample.latency_min / layout.max_latency) * (layout.y0 - layout.y1)
+    return x, y_min, y_max
+
+
+def format_axis_label(ts: float, start_ts: float, end_ts: float) -> str:
+    """Time axis label; the date is included whenever the range spans a day."""
+    moment = datetime.fromtimestamp(ts)
+    start = datetime.fromtimestamp(start_ts)
+    end = datetime.fromtimestamp(end_ts)
+    if start.date() == end.date():
+        return moment.strftime("%H:%M:%S")
+    return moment.strftime("%m-%d %H:%M:%S")
 
 
 def build_line_segments(
@@ -210,6 +245,14 @@ def render_chart_png(
     draw.text((20, (layout.y0 + layout.y1) / 2), y_label, fill="#222222", font=axis_font)
 
     mapper = lambda sample: sample_xy(sample, layout)
+    # Latency envelope first (behind the average line) for aggregated data.
+    for sample in samples:
+        envelope = sample_envelope_xy(sample, layout)
+        if envelope is not None:
+            x, y_min, y_max = envelope
+            if y_max < y_min:
+                y_min, y_max = y_max, y_min
+            draw.line((x, y_min, x, y_max), fill="#B3D4F0", width=3)
     for segment in build_line_segments(samples, mapper):
         if len(segment) >= 2:
             draw.line(segment, fill="#1976D2", width=3)
@@ -234,7 +277,7 @@ def render_chart_png(
         ratio = i / 4
         ts = layout.start_ts + ratio * (layout.end_ts - layout.start_ts)
         x = layout.x0 + ratio * (layout.x1 - layout.x0)
-        label = datetime.fromtimestamp(ts).strftime("%H:%M:%S")
+        label = format_axis_label(ts, layout.start_ts, layout.end_ts)
         box = draw.textbbox((0, 0), label, font=tick_font)
         draw.text((x - (box[2] - box[0]) / 2, layout.y0 + 18), label, fill="#333333", font=tick_font)
 

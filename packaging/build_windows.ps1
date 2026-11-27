@@ -121,7 +121,6 @@ function Resolve-BasePython {
         @{ Command = "py"; Prefix = @("-3.13-64") },
         @{ Command = "py"; Prefix = @("-3.12-64") },
         @{ Command = "py"; Prefix = @("-3.11-64") },
-        @{ Command = "py"; Prefix = @("-3.10-64") },
         @{ Command = "python"; Prefix = @() },
         @{ Command = "python3"; Prefix = @() }
     )
@@ -138,7 +137,7 @@ function Resolve-BasePython {
             continue
         }
     }
-    throw "A supported 64-bit Python 3.10-3.13 installation was not found. Install a python.org x64 build and retry."
+    throw "A supported 64-bit Python 3.11-3.13 installation was not found. Install a python.org x64 build and retry."
 }
 
 function Test-BuildInterpreter {

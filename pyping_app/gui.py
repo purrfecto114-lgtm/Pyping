@@ -14,11 +14,14 @@ from tkinter import filedialog, font as tkfont, messagebox, scrolledtext, ttk
 from .charting import (
     build_line_segments,
     calculate_layout,
+    format_axis_label,
     format_latency,
     render_chart_png,
+    sample_envelope_xy,
     sample_xy,
 )
-from .core import PingBackend, run_ping_session
+from .core import PingBackend, run_ping_session, system_ping_supported
+from .events import FailureEventTracker, event_window
 from .fileio import atomic_write_text
 from .i18n import LANGUAGES, LANGUAGE_NAMES
 from .models import (
@@ -214,6 +217,7 @@ class TimeRangeDialog:
         count: int,
         ui_font: str,
         palette: dict[str, str],
+        events: list | None = None,
     ) -> None:
         self.parent = parent
         self.t = translations
@@ -221,11 +225,13 @@ class TimeRangeDialog:
         self.count = count
         self.ui_font = ui_font
         self.palette = palette
+        self.events = events or []
         self.result: tuple[datetime, datetime] | None = None
         self.dialog: tk.Toplevel | None = None
         self.preset_var = tk.StringVar(value="range_all")
         self.start_var = tk.StringVar(value=bounds[0].strftime(TIME_FORMAT))
         self.end_var = tk.StringVar(value=bounds[1].strftime(TIME_FORMAT))
+        self._preset_range: tuple[datetime, datetime] | None = None
 
     def show(self) -> tuple[datetime, datetime] | None:
         dialog = tk.Toplevel(self.parent)
@@ -250,33 +256,17 @@ class TimeRangeDialog:
             justify="left",
         ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 12))
 
-        ttk.Label(frame, text=self.t["range_preset"]).grid(row=1, column=0, sticky="w", padx=(0, 10), pady=6)
-        values = [self.t[key] for key, _seconds in self.PRESETS]
-        self._label_to_key = {self.t[key]: key for key, _seconds in self.PRESETS}
-        self._key_to_seconds = {key: seconds for key, seconds in self.PRESETS}
-        combo = ttk.Combobox(frame, state="readonly", values=values, width=24)
-        combo.set(self.t["range_all"])
-        combo.grid(row=1, column=1, sticky="ew", pady=6)
-        combo.bind("<<ComboboxSelected>>", lambda _event: self._preset_changed(combo.get()))
-
-        ttk.Label(frame, text=self.t["range_start"]).grid(row=2, column=0, sticky="w", padx=(0, 10), pady=6)
-        self.start_entry = ttk.Entry(frame, textvariable=self.start_var, width=26)
-        self.start_entry.grid(row=2, column=1, sticky="ew", pady=6)
-
-        ttk.Label(frame, text=self.t["range_end"]).grid(row=3, column=0, sticky="w", padx=(0, 10), pady=6)
-        self.end_entry = ttk.Entry(frame, textvariable=self.end_var, width=26)
-        self.end_entry.grid(row=3, column=1, sticky="ew", pady=6)
-
-        ttk.Label(frame, text=self.t["range_format"], style="Muted.TLabel").grid(
-            row=4, column=0, columnspan=2, sticky="w", pady=(2, 12)
-        )
+        notebook = ttk.Notebook(frame)
+        notebook.grid(row=1, column=0, columnspan=2, sticky="nsew", pady=(0, 12))
+        self._build_time_tab(notebook)
+        self._build_events_tab(notebook)
 
         buttons = ttk.Frame(frame)
-        buttons.grid(row=5, column=0, columnspan=2, sticky="e")
+        buttons.grid(row=2, column=0, columnspan=2, sticky="e")
         ttk.Button(buttons, text=self.t["range_confirm"], command=self._confirm, style="Primary.TButton").pack(side="left", padx=5)
         ttk.Button(buttons, text=self.t["range_cancel"], command=self._cancel).pack(side="left", padx=5)
 
-        frame.columnconfigure(1, weight=1)
+        frame.columnconfigure(0, weight=1)
         self._set_custom_state(False)
         dialog.update_idletasks()
         x = self.parent.winfo_rootx() + max(0, (self.parent.winfo_width() - dialog.winfo_width()) // 2)
@@ -285,11 +275,121 @@ class TimeRangeDialog:
         dialog.wait_window()
         return self.result
 
+    def _build_time_tab(self, notebook: ttk.Notebook) -> None:
+        page = ttk.Frame(notebook, padding=12, style="Dialog.TFrame")
+        notebook.add(page, text=self.t["range_tab_time"])
+        page.columnconfigure(1, weight=1)
+
+        ttk.Label(page, text=self.t["range_preset"]).grid(row=0, column=0, sticky="w", padx=(0, 10), pady=6)
+        values = [self.t[key] for key, _seconds in self.PRESETS]
+        self._label_to_key = {self.t[key]: key for key, _seconds in self.PRESETS}
+        self._key_to_seconds = {key: seconds for key, seconds in self.PRESETS}
+        combo = ttk.Combobox(page, state="readonly", values=values, width=24)
+        combo.set(self.t["range_all"])
+        combo.grid(row=0, column=1, sticky="ew", pady=6)
+        combo.bind("<<ComboboxSelected>>", lambda _event: self._preset_changed(combo.get()))
+
+        ttk.Label(page, text=self.t["range_start"]).grid(row=1, column=0, sticky="w", padx=(0, 10), pady=6)
+        self.start_entry = ttk.Entry(page, textvariable=self.start_var, width=26)
+        self.start_entry.grid(row=1, column=1, sticky="ew", pady=6)
+
+        ttk.Label(page, text=self.t["range_end"]).grid(row=2, column=0, sticky="w", padx=(0, 10), pady=6)
+        self.end_entry = ttk.Entry(page, textvariable=self.end_var, width=26)
+        self.end_entry.grid(row=2, column=1, sticky="ew", pady=6)
+
+        ttk.Label(page, text=self.t["range_format"], style="Muted.TLabel").grid(
+            row=3, column=0, columnspan=2, sticky="w", pady=(2, 4)
+        )
+
+    def _build_events_tab(self, notebook: ttk.Notebook) -> None:
+        page = ttk.Frame(notebook, padding=12, style="Dialog.TFrame")
+        notebook.add(page, text=self.t["range_tab_events"])
+        page.columnconfigure(0, weight=1)
+        page.rowconfigure(1, weight=1)
+
+        ttk.Label(page, text=self.t["events_hint"], style="Muted.TLabel", wraplength=380, justify="left").grid(
+            row=0, column=0, columnspan=3, sticky="w", pady=(0, 8)
+        )
+        columns = ("first", "last", "failures", "kind", "state")
+        headings = (
+            self.t["events_col_first"],
+            self.t["events_col_last"],
+            self.t["events_col_failures"],
+            self.t["events_col_kind"],
+            self.t["events_col_state"],
+        )
+        self._events_tree = ttk.Treeview(
+            page,
+            columns=columns,
+            show="headings",
+            height=7,
+            selectmode="browse",
+        )
+        for column, heading in zip(columns, headings):
+            self._events_tree.heading(column, text=heading)
+            self._events_tree.column(
+                column,
+                width=120 if column in ("first", "last") else 80,
+                anchor="w",
+            )
+        self._events_tree.grid(row=1, column=0, columnspan=3, sticky="nsew")
+        scrollbar = ttk.Scrollbar(page, orient="vertical", command=self._events_tree.yview)
+        self._events_tree.configure(yscrollcommand=scrollbar.set)
+        scrollbar.grid(row=1, column=3, sticky="ns")
+
+        if self.events:
+            for row in self.events:
+                kind_key = "events_kind_network" if row.kind == "network" else "events_kind_local"
+                state_key = "events_recovered" if row.recovered else "events_unrecovered"
+                self._events_tree.insert(
+                    "",
+                    "end",
+                    iid=str(row.event_id),
+                    values=(
+                        row.first_failure_ts.strftime(TIME_FORMAT),
+                        row.last_failure_ts.strftime(TIME_FORMAT),
+                        row.failure_count,
+                        self.t[kind_key],
+                        self.t[state_key],
+                    ),
+                )
+        else:
+            self._events_tree.insert(
+                "", "end", iid="empty", values=(self.t["events_empty"], "", "", "", "")
+            )
+
+        window_buttons = ttk.Frame(page, style="Dialog.TFrame")
+        window_buttons.grid(row=2, column=0, columnspan=3, sticky="w", pady=(10, 0))
+        for seconds, key in ((30, "events_window_30s"), (60, "events_window_1m"), (300, "events_window_5m")):
+            ttk.Button(
+                window_buttons,
+                text=self.t[key],
+                command=lambda margin=seconds: self._use_selected_event(margin),
+            ).pack(side="left", padx=(0, 8))
+
+    def _use_selected_event(self, margin_seconds: int) -> None:
+        selection = self._events_tree.selection()
+        if not selection:
+            return
+        selected_id = selection[0]
+        if selected_id == "empty":
+            return
+        row = next((item for item in self.events if item.event_id == int(selected_id)), None)
+        if row is None:
+            return
+        # Observed event span: the true outage may have started between the
+        # last success and the first failure, so the window is symmetric
+        # around the observed span and clamped to the session bounds.
+        self.result = event_window(row, self.bounds, margin_seconds)
+        if self.dialog is not None:
+            self.dialog.destroy()
+
     def _preset_changed(self, label: str) -> None:
         key = self._label_to_key[label]
         self.preset_var.set(key)
         seconds = self._key_to_seconds[key]
         if seconds == "custom":
+            self._preset_range = None
             self._set_custom_state(True)
             return
         self._set_custom_state(False)
@@ -298,6 +398,10 @@ class TimeRangeDialog:
             start = start_bound
         else:
             start = max(start_bound, end_bound - timedelta(seconds=int(seconds)))
+        # Presets keep the exact sub-second bounds of the session.  The end is
+        # exclusive ([start, end)); one microsecond covers the final record.
+        end = end_bound + timedelta(microseconds=1)
+        self._preset_range = (start, end)
         self.start_var.set(start.strftime(TIME_FORMAT))
         self.end_var.set(end_bound.strftime(TIME_FORMAT))
 
@@ -318,25 +422,40 @@ class TimeRangeDialog:
         return result
 
     def _confirm(self) -> None:
+        key = self.preset_var.get()
+        if key != "range_custom" and self._preset_range is not None:
+            # Presets must not depend on the second-truncated display text:
+            # return the exact stored boundaries directly.
+            self.result = self._preset_range
+            if self.dialog is not None:
+                self.dialog.destroy()
+            return
+        start_text = self.start_var.get()
+        end_text = self.end_var.get()
         try:
-            start = self._parse_datetime(self.start_var.get())
-            end = self._parse_datetime(self.end_var.get())
+            start = self._parse_datetime(start_text)
+            end = self._parse_datetime(end_text)
         except ValueError:
             messagebox.showerror(self.t["error_title"], self.t["range_invalid"], parent=self.dialog)
             return
         bounds_start, bounds_end = self.bounds
-        if start > end or end < bounds_start or start > bounds_end:
+        if start > end or end <= bounds_start or start > bounds_end:
             messagebox.showerror(self.t["error_title"], self.t["range_invalid"], parent=self.dialog)
             return
-        start = max(start, bounds_start)
-        end = min(end, bounds_end)
-        if end < bounds_end:
-            try:
-                end = min(end + timedelta(seconds=0.999999), bounds_end)
-            except OverflowError:
-                end = bounds_end
+        # Whole-second custom inputs mean the full second; the end boundary is
+        # exclusive ([start, end)), so extend to the end of that second.
+        # Sub-second (ISO fractional) inputs stay exact: 12:00:00.200-12:00:00.300
+        # must not silently swallow the next 999999 microseconds.
+        try:
+            datetime.strptime(end_text.strip(), TIME_FORMAT)
+            whole_second_end = True
+        except ValueError:
+            whole_second_end = False
+        if whole_second_end:
+            end = end + timedelta(seconds=0.999999)
         self.result = (start, end)
-        self.dialog.destroy()
+        if self.dialog is not None:
+            self.dialog.destroy()
 
     def _cancel(self) -> None:
         self.result = None
@@ -477,6 +596,18 @@ class ChartWindow(tk.Toplevel):
         self.canvas.create_text(24, (layout.y0 + layout.y1) / 2, text=self.t["chart_latency"], angle=90, font=(self.ui_font, 10), fill=text_color)
 
         mapper = lambda sample: sample_xy(sample, layout)
+        # Aggregated latency envelope (min/max) behind the average line.
+        for sample in self.samples:
+            envelope = sample_envelope_xy(sample, layout)
+            if envelope is not None:
+                x, y_min, y_max = envelope
+                if y_max < y_min:
+                    y_min, y_max = y_max, y_min
+                self.canvas.create_line(
+                    x, y_min, x, y_max,
+                    fill=self.palette.get("grid", self.palette["border"]),
+                    width=3,
+                )
         for segment in build_line_segments(self.samples, mapper):
             if len(segment) >= 2:
                 flattened = [coord for point in segment for coord in point]
@@ -500,7 +631,13 @@ class ChartWindow(tk.Toplevel):
             ratio = i / 4
             ts = layout.start_ts + ratio * (layout.end_ts - layout.start_ts)
             x = layout.x0 + ratio * (layout.x1 - layout.x0)
-            self.canvas.create_text(x, layout.y0 + 20, text=datetime.fromtimestamp(ts).strftime("%H:%M:%S"), font=(self.ui_font, 9), fill=muted_color)
+            self.canvas.create_text(
+                x,
+                layout.y0 + 20,
+                text=format_axis_label(ts, layout.start_ts, layout.end_ts),
+                font=(self.ui_font, 9),
+                fill=muted_color,
+            )
 
         legend_x = layout.x1 + 18
         legend_y = layout.y1 + 10
@@ -630,11 +767,16 @@ class PingApp:
         self.current_store: SessionStore | None = None
         self.persisted_count = 0
         self.statistics = RunStatistics()
+        self.event_tracker = FailureEventTracker()
         self.data_queue: queue.Queue = queue.Queue(maxsize=QUEUE_MAXSIZE)
         self.stop_event = threading.Event()
         self.ping_thread: threading.Thread | None = None
         self.export_thread: threading.Thread | None = None
         self.export_result_queue: queue.Queue = queue.Queue(maxsize=1)
+        self.chart_result_queue: queue.Queue = queue.Queue(maxsize=1)
+        self._chart_query_id = 0
+        self._chart_query_in_progress = False
+        self._chart_status_before_query: str | None = None
         self.after_id: str | None = None
         self.status_after_id: str | None = None
         self.running = False
@@ -1157,7 +1299,7 @@ class PingApp:
         has_data = self.current_store is not None and self.persisted_count > 0
         self.start_btn.configure(state="disabled" if self.running or self.export_in_progress else "normal")
         self.stop_btn.configure(state="normal" if self.running else "disabled")
-        self.chart_btn.configure(state="normal" if has_data else "disabled")
+        self.chart_btn.configure(state="normal" if has_data and not self._chart_query_in_progress else "disabled")
         self.csv_btn.configure(state="normal" if has_data and not self.export_in_progress else "disabled")
         self.clear_data_btn.configure(state="normal" if has_data and not self.running and not self.export_in_progress else "disabled")
 
@@ -1184,7 +1326,7 @@ class PingApp:
         params = self.validate_inputs()
         if params is None:
             return
-        if not self.backend.available:
+        if not self.backend.available and not system_ping_supported():
             self.show_dependency_warnings(force_ping3=True)
             return
 
@@ -1193,6 +1335,7 @@ class PingApp:
         self.current_store = SessionStore()
         self.persisted_count = 0
         self.statistics = RunStatistics()
+        self.event_tracker = FailureEventTracker()
         self.current_resolved_address = ""
         self.session_id += 1
         self.current_config = RunConfig(
@@ -1259,6 +1402,20 @@ class PingApp:
                 log_items.append((self._s("run_resolve_failed").format(detail=message.payload) + "\n", "error"))
             elif message.kind == "worker_error":
                 log_items.append((self._s("run_worker_error").format(detail=message.payload) + "\n", "error"))
+            elif message.kind == "backend_switch":
+                info = message.payload or {}
+                closed = self.event_tracker.mark_boundary()
+                if closed is not None and self.current_store is not None:
+                    try:
+                        self.current_store.insert_event(closed)
+                    except sqlite3.Error:
+                        pass
+                log_items.append(
+                    (
+                        self._s("run_backend_switch").format(reason=info.get("reason", "")) + "\n",
+                        "info",
+                    )
+                )
             elif message.kind == "finished":
                 finished_reason = str(message.payload)
 
@@ -1268,6 +1425,12 @@ class PingApp:
                 self.persisted_count += inserted
                 for record in records:
                     self.statistics.update(record)
+                    closed_event = self.event_tracker.process(record)
+                    if closed_event is not None:
+                        try:
+                            self.current_store.insert_event(closed_event)
+                        except sqlite3.Error:
+                            pass
                     log_items.append((self._format_record(record), self._record_tag(record.status)))
             except (sqlite3.Error, OSError) as exc:
                 self.stop_event.set()
@@ -1295,6 +1458,8 @@ class PingApp:
             return "success"
         if status == ResultStatus.TIMEOUT:
             return "timeout"
+        if status == ResultStatus.CANCELLED:
+            return "muted"
         return "error"
 
     def _format_record(self, record) -> str:
@@ -1417,6 +1582,14 @@ class PingApp:
         if self.run_started_monotonic is not None:
             self.last_elapsed_seconds = time.monotonic() - self.run_started_monotonic
         self.running = False
+        # Close any still-open failure event at session end as unrecovered;
+        # the stop time is an observation boundary, not a recovery time.
+        closed_event = self.event_tracker.flush()
+        if closed_event is not None and self.current_store is not None:
+            try:
+                self.current_store.insert_event(closed_event)
+            except sqlite3.Error:
+                pass
         self.status_key = "state_stopped" if reason == "stopped" else "state_finished" if reason == "completed" else "state_error"
         self._set_inputs_enabled(True)
         self._refresh_button_states()
@@ -1440,6 +1613,8 @@ class PingApp:
         if self.current_store is None:
             messagebox.showinfo(self._s("app_title"), self._s("no_chart_data"), parent=self.root)
             return
+        if self._chart_query_in_progress:
+            return
         if self.after_id is not None:
             try:
                 self.root.after_cancel(self.after_id)
@@ -1447,20 +1622,136 @@ class PingApp:
                 pass
             self.after_id = None
         self.poll_queue()
-        bounds = self.current_store.bounds()
-        count = self.current_store.count()
-        if bounds is None or count == 0:
+        if self.current_store is None:
             messagebox.showinfo(self._s("app_title"), self._s("no_chart_data"), parent=self.root)
             return
-        selected = TimeRangeDialog(self.root, self.t, bounds, count, self.ui_font, self.palette).show()
+        # All statistics / aggregation queries run off the GUI thread; the UI
+        # only handles bounded results.  Results carry the session identity so
+        # a stale query can never populate a newer session's chart.
+        self._chart_query_id += 1
+        query_id = self._chart_query_id
+        self._chart_query_in_progress = True
+        self._chart_status_before_query = self.status_key
+        self.status_key = "state_chart_query"
+        self._refresh_button_states()
+        self._update_status_display()
+        store = self.current_store
+        session = self.session_id
+        try:
+            self.chart_result_queue.get_nowait()
+        except queue.Empty:
+            pass
+
+        def bounds_worker() -> None:
+            try:
+                bounds = store.bounds()
+                count = store.count()
+                events = store.failure_events(limit=500)
+                error: Exception | None = None
+            except Exception as exc:  # query failures surface in the UI thread
+                bounds, count, events, error = None, 0, [], exc
+            try:
+                self.chart_result_queue.put_nowait(
+                    (query_id, session, store, bounds, count, events, error)
+                )
+            except queue.Full:
+                pass
+
+        threading.Thread(target=bounds_worker, daemon=True, name="PypingChartQuery").start()
+        self.root.after(40, self._poll_chart_bounds)
+
+    def _poll_chart_bounds(self) -> None:
+        try:
+            (
+                query_id,
+                session,
+                store,
+                bounds,
+                count,
+                events,
+                error,
+            ) = self.chart_result_queue.get_nowait()
+        except queue.Empty:
+            if self._chart_query_in_progress:
+                self.root.after(40, self._poll_chart_bounds)
+            return
+        if query_id != self._chart_query_id or store is not self.current_store or session != self.session_id:
+            # Stale query result: discard it instead of showing old data.
+            self._finish_chart_query()
+            return
+        if error is not None:
+            messagebox.showerror(self._s("error_title"), f"{self._s('run_worker_error').format(detail=error)}", parent=self.root)
+            self._finish_chart_query()
+            return
+        if bounds is None or count == 0:
+            messagebox.showinfo(self._s("app_title"), self._s("no_chart_data"), parent=self.root)
+            self._finish_chart_query()
+            return
+        selected = TimeRangeDialog(
+            self.root,
+            self.t,
+            bounds,
+            count,
+            self.ui_font,
+            self.palette,
+            events=events,
+        ).show()
         if selected is None:
+            self._finish_chart_query()
             return
         start, end = selected
-        stats = self.current_store.range_statistics(start, end)
-        if stats.total == 0:
+        self._chart_query_id += 1
+        snapshot_query_id = self._chart_query_id
+        try:
+            self.chart_result_queue.get_nowait()
+        except queue.Empty:
+            pass
+
+        def snapshot_worker() -> None:
+            try:
+                stats, samples, aggregated, _exact_count = store.chart_snapshot(
+                    start, end, max_points=MAX_CHART_POINTS
+                )
+                snapshot_error: Exception | None = None
+            except Exception as exc:
+                stats, samples, aggregated, snapshot_error = None, [], False, exc
+            try:
+                self.chart_result_queue.put_nowait(
+                    (snapshot_query_id, session, store, start, end, (stats, samples, aggregated), snapshot_error)
+                )
+            except queue.Full:
+                pass
+
+        threading.Thread(target=snapshot_worker, daemon=True, name="PypingChartSnapshot").start()
+        self.root.after(40, self._poll_chart_snapshot)
+
+    def _poll_chart_snapshot(self) -> None:
+        try:
+            (
+                query_id,
+                session,
+                store,
+                start,
+                end,
+                payload,
+                error,
+            ) = self.chart_result_queue.get_nowait()
+        except queue.Empty:
+            if self._chart_query_in_progress:
+                self.root.after(40, self._poll_chart_snapshot)
+            return
+        if query_id != self._chart_query_id or store is not self.current_store or session != self.session_id:
+            self._finish_chart_query()
+            return
+        self._finish_chart_query()
+        if error is not None or payload is None:
+            detail = error if error is not None else "empty snapshot"
+            messagebox.showerror(self._s("error_title"), f"{self._s('run_worker_error').format(detail=detail)}", parent=self.root)
+            return
+        stats, samples, aggregated = payload
+        if stats is None or stats.total == 0:
             messagebox.showinfo(self._s("app_title"), self._s("range_empty"), parent=self.root)
             return
-        samples, aggregated, _exact_count = self.current_store.chart_samples(start, end, max_points=MAX_CHART_POINTS)
         host_label = self.current_config.original_host if self.current_config else self.host_var.get().strip()
         if self.current_resolved_address:
             host_label = f"{host_label} ({self.current_resolved_address})"
@@ -1478,6 +1769,14 @@ class PingApp:
             on_closed=self._chart_closed,
         )
         self.chart_windows.append(window)
+
+    def _finish_chart_query(self) -> None:
+        self._chart_query_in_progress = False
+        if self.status_key == "state_chart_query":
+            self.status_key = self._chart_status_before_query or self.status_key
+            self._chart_status_before_query = None
+        self._refresh_button_states()
+        self._update_status_display()
 
     def export_csv(self) -> None:
         if self.current_store is None or self.persisted_count == 0 or self.export_in_progress:
@@ -1538,6 +1837,7 @@ class PingApp:
         self.current_resolved_address = ""
         self.persisted_count = 0
         self.statistics = RunStatistics()
+        self.event_tracker = FailureEventTracker()
         self.status_key = "state_idle"
         self.last_elapsed_seconds = 0.0
         self.update_stats_display()

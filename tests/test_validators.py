@@ -23,6 +23,8 @@ class ValidatorTests(unittest.TestCase):
     def test_packet_size_limits(self):
         self.assertEqual(parse_packet_size("56"), 56)
         self.assert_invalid(parse_packet_size, "0")
+        self.assert_invalid(parse_packet_size, "7")
+        self.assertEqual(parse_packet_size("8"), 8)
         self.assert_invalid(parse_packet_size, "65501")
         self.assert_invalid(parse_packet_size, "1e3")
 
