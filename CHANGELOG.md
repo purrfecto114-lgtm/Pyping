@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.5.1
+
+### Fixes and footprint
+
+- Failure-events dialog: the notebook, tabs and event tree now follow the
+  light/dark palettes instead of the raw clam theme (fixed poor contrast);
+  the empty state is rendered as a centered label instead of a filler row
+  (fixed CJK text being clipped in half); the hint text is shorter with
+  DPI-aware tree row heights.
+- Frozen builds now exclude the unused Pillow format plugins and auxiliary
+  backends (only PNG output is needed): the Linux onedir payload shrinks
+  from 60 MiB to 50 MiB (pillow.libs 15 MiB -> 8.1 MiB); Windows payloads
+  shrink accordingly. UPX stays disabled on purpose: packed executables are
+  a common antivirus false-positive, which outweighs the size gain.
+
 ## v0.5.0
 
 ### Reliability and measurement correctness

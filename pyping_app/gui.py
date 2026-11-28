@@ -242,6 +242,7 @@ class TimeRangeDialog:
         dialog.grab_set()
         dialog.resizable(False, False)
         dialog.protocol("WM_DELETE_WINDOW", self._cancel)
+        self._setup_dialog_styles()
 
         frame = ttk.Frame(dialog, padding=20, style="Dialog.TFrame")
         frame.pack(fill="both", expand=True)
@@ -256,7 +257,7 @@ class TimeRangeDialog:
             justify="left",
         ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 12))
 
-        notebook = ttk.Notebook(frame)
+        notebook = ttk.Notebook(frame, style="Dialog.TNotebook")
         notebook.grid(row=1, column=0, columnspan=2, sticky="nsew", pady=(0, 12))
         self._build_time_tab(notebook)
         self._build_events_tab(notebook)
@@ -274,6 +275,70 @@ class TimeRangeDialog:
         dialog.geometry(f"+{x}+{y}")
         dialog.wait_window()
         return self.result
+
+    def _setup_dialog_styles(self) -> None:
+        """Palette-integrated styles for the notebook, tabs and event tree.
+
+        Without these the clam theme renders mid-gray tabs on mid-gray
+        surfaces (poor contrast) and Treeview rows too short for CJK text.
+        """
+        style = ttk.Style(self.parent)
+        palette = self.palette
+        style.configure(
+            "Dialog.TNotebook",
+            background=palette["window"],
+            bordercolor=palette["border"],
+            lightcolor=palette["window"],
+            darkcolor=palette["border"],
+            tabmargins=(8, 6, 8, 0),
+        )
+        style.configure(
+            "Dialog.TNotebook.Tab",
+            background=palette["window"],
+            foreground=palette["muted"],
+            bordercolor=palette["border"],
+            lightcolor=palette["window"],
+            darkcolor=palette["window"],
+            padding=(14, 6),
+        )
+        style.map(
+            "Dialog.TNotebook.Tab",
+            background=[("selected", palette["surface"])],
+            foreground=[("selected", palette["text"]), ("active", palette["text"])],
+            bordercolor=[("selected", palette["accent"])],
+        )
+        row_height = max(28, int(round(28 * self._dpi_scale())))
+        style.configure(
+            "Events.TTreeview",
+            background=palette["surface"],
+            fieldbackground=palette["surface"],
+            foreground=palette["text"],
+            bordercolor=palette["border"],
+            lightcolor=palette["border"],
+            darkcolor=palette["border"],
+            rowheight=row_height,
+        )
+        style.map(
+            "Events.TTreeview",
+            background=[("selected", palette["selection"])],
+            foreground=[("selected", palette["text"])],
+        )
+        style.configure(
+            "Events.Treeview.Heading",
+            background=palette["surface_alt"],
+            foreground=palette["muted"],
+            bordercolor=palette["border"],
+            lightcolor=palette["border"],
+            darkcolor=palette["border"],
+            relief="flat",
+        )
+        style.map("Events.Treeview.Heading", background=[("active", palette["surface_alt"])])
+
+    def _dpi_scale(self) -> float:
+        try:
+            return max(1.0, self.parent.winfo_fpixels("1i") / 96.0)
+        except (tk.TclError, RuntimeError, AttributeError):
+            return 1.0
 
     def _build_time_tab(self, notebook: ttk.Notebook) -> None:
         page = ttk.Frame(notebook, padding=12, style="Dialog.TFrame")
@@ -307,9 +372,19 @@ class TimeRangeDialog:
         page.columnconfigure(0, weight=1)
         page.rowconfigure(1, weight=1)
 
-        ttk.Label(page, text=self.t["events_hint"], style="Muted.TLabel", wraplength=380, justify="left").grid(
-            row=0, column=0, columnspan=3, sticky="w", pady=(0, 8)
-        )
+        ttk.Label(
+            page,
+            text=self.t["events_hint"],
+            style="Muted.TLabel",
+            wraplength=400,
+            justify="left",
+        ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 8))
+
+        container = ttk.Frame(page, style="Dialog.TFrame")
+        container.grid(row=1, column=0, columnspan=3, sticky="nsew")
+        container.columnconfigure(0, weight=1)
+        container.rowconfigure(0, weight=1)
+
         columns = ("first", "last", "failures", "kind", "state")
         headings = (
             self.t["events_col_first"],
@@ -319,11 +394,12 @@ class TimeRangeDialog:
             self.t["events_col_state"],
         )
         self._events_tree = ttk.Treeview(
-            page,
+            container,
             columns=columns,
             show="headings",
             height=7,
             selectmode="browse",
+            style="Events.TTreeview",
         )
         for column, heading in zip(columns, headings):
             self._events_tree.heading(column, text=heading)
@@ -332,11 +408,13 @@ class TimeRangeDialog:
                 width=120 if column in ("first", "last") else 80,
                 anchor="w",
             )
-        self._events_tree.grid(row=1, column=0, columnspan=3, sticky="nsew")
-        scrollbar = ttk.Scrollbar(page, orient="vertical", command=self._events_tree.yview)
+        self._events_tree.grid(row=0, column=0, sticky="nsew")
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=self._events_tree.yview)
         self._events_tree.configure(yscrollcommand=scrollbar.set)
-        scrollbar.grid(row=1, column=3, sticky="ns")
+        scrollbar.grid(row=0, column=1, sticky="ns")
 
+        # The empty state is a real label, not a filler row: Treeview rows are
+        # clipped to their fixed row height, which cut CJK text in half.
         if self.events:
             for row in self.events:
                 kind_key = "events_kind_network" if row.kind == "network" else "events_kind_local"
@@ -354,9 +432,15 @@ class TimeRangeDialog:
                     ),
                 )
         else:
-            self._events_tree.insert(
-                "", "end", iid="empty", values=(self.t["events_empty"], "", "", "", "")
-            )
+            self._events_tree.grid_remove()
+            ttk.Label(
+                container,
+                text=self.t["events_empty"],
+                style="Muted.TLabel",
+                wraplength=400,
+                justify="center",
+                anchor="center",
+            ).grid(row=0, column=0, sticky="nsew", ipady=48)
 
         window_buttons = ttk.Frame(page, style="Dialog.TFrame")
         window_buttons.grid(row=2, column=0, columnspan=3, sticky="w", pady=(10, 0))

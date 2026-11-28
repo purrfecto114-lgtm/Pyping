@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pyping-gui"
-version = "0.5.0"
+version = "0.5.1"
 description = "Cross-platform Tkinter ping tool with preserved-layout GUI optimization and manual time-range charts"
 readme = "README.md"
 requires-python = ">=3.11"

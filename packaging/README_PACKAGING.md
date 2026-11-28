@@ -1,4 +1,4 @@
-# Pyping v0.5.0 Windows 安全打包说明
+# Pyping v0.5.1 Windows 安全打包说明
 
 ## 推荐产物
 
@@ -6,9 +6,9 @@
 
 - `dist\Pyping\`：PyInstaller onedir；
 - `dist-onefile\Pyping.exe`：单 EXE 便携版；
-- `release\Pyping-v0.5.0-Windows-x64-portable.zip`；
-- `release\Pyping-v0.5.0-Windows-x64-onefile.exe`；
-- `release\Pyping-Setup-0.5.0-x64.exe`：存在 Inno Setup 时生成；
+- `release\Pyping-v0.5.1-Windows-x64-portable.zip`；
+- `release\Pyping-v0.5.1-Windows-x64-onefile.exe`；
+- `release\Pyping-Setup-0.5.1-x64.exe`：存在 Inno Setup 时生成；
 - `release\release-manifest.json`：文件名、大小和 SHA-256；
 - `release\SHA256SUMS.txt`：所有可发布文件的独立校验值。
 

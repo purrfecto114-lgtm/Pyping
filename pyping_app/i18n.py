@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-APP_VERSION = "v0.5.0"
+APP_VERSION = "v0.5.1"
 APP_HOMEPAGE = "https://github.com/purrfecto114-lgtm/Pyping"
 
 LANGUAGE_NAMES = {"zh_CN": "简体中文", "en_US": "English"}
@@ -98,7 +98,7 @@ LANGUAGES = {
         "events_window_30s": "前后 30 秒",
         "events_window_1m": "前后 1 分钟",
         "events_window_5m": "前后 5 分钟",
-        "events_hint": "选择一个故障时段后点击窗口按钮，直接生成该故障前后的图表。",
+        "events_hint": "选择故障时段，点击窗口按钮生成附近图表。",
         "no_chart_data": "当前没有可用于生成图表的数据。",
         "dependency_title": "依赖提醒",
         "dependency_ping3": "未检测到 ping3，Ping 主功能不可用。请安装项目依赖后重试。\n\n诊断: {detail}",
@@ -253,7 +253,7 @@ LANGUAGES = {
         "events_window_30s": "±30 s",
         "events_window_1m": "±1 min",
         "events_window_5m": "±5 min",
-        "events_hint": "Pick a failure event and click a window button to chart the period around it.",
+        "events_hint": "Select an event, then click a window button to chart around it.",
         "no_chart_data": "No data is available for chart generation.",
         "dependency_title": "Dependency warning",
         "dependency_ping3": "ping3 was not found, so Ping is unavailable. Install the project dependencies and retry.\n\nDiagnostic: {detail}",

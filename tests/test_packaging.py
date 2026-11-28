@@ -54,7 +54,7 @@ class PackagingTests(unittest.TestCase):
         source = (ROOT / "packaging" / "installer" / "Pyping.iss").read_text(encoding="utf-8")
         self.assertIn("SourceDir={#ProjectRoot}", source)
         self.assertIn('Source: "dist\\Pyping\\*"', source)
-        self.assertIn('#define MyAppVersion "0.5.0"', source)
+        self.assertIn('#define MyAppVersion "0.5.1"', source)
         # ChineseSimplified.isl is not shipped with Inno Setup 6 on the
         # windows-2022 runner, so it must be vendored into the repository
         # and referenced via a project-relative path.
@@ -135,7 +135,7 @@ class PackagingTests(unittest.TestCase):
             self.assertNotIn("https://", line)
 
     def test_release_verifier_accepts_exact_payload_set(self) -> None:
-        version = "0.5.0"
+        version = "0.5.1"
         with tempfile.TemporaryDirectory() as directory_name:
             directory = pathlib.Path(directory_name)
             payload_names = {
@@ -175,7 +175,7 @@ class PackagingTests(unittest.TestCase):
             verify_release(directory, version, require_installer=True)
 
     def test_release_verifier_rejects_boolean_manifest_size(self) -> None:
-        version = "0.5.0"
+        version = "0.5.1"
         with tempfile.TemporaryDirectory() as directory_name:
             directory = pathlib.Path(directory_name)
             names = {
@@ -206,7 +206,7 @@ class PackagingTests(unittest.TestCase):
                 verify_release(directory, version, require_installer=False)
 
     def test_release_verifier_rejects_source_commit_mismatch(self) -> None:
-        version = "0.5.0"
+        version = "0.5.1"
         with tempfile.TemporaryDirectory() as directory_name:
             directory = pathlib.Path(directory_name)
             payload_names = {
@@ -230,7 +230,7 @@ class PackagingTests(unittest.TestCase):
                 "version": version,
                 "platform": "windows-x64",
                 "source_commit": "a" * 40,
-                "source_ref": "refs/tags/v0.5.0",
+                "source_ref": "refs/tags/v0.5.1",
                 "files": entries,
             }
             manifest_path = directory / "release-manifest.json"
@@ -249,11 +249,11 @@ class PackagingTests(unittest.TestCase):
                     version,
                     require_installer=False,
                     source_commit="b" * 40,
-                    source_ref="refs/tags/v0.5.0",
+                    source_ref="refs/tags/v0.5.1",
                 )
 
     def test_release_verifier_rejects_unexpected_file(self) -> None:
-        version = "0.5.0"
+        version = "0.5.1"
         with tempfile.TemporaryDirectory() as directory_name:
             directory = pathlib.Path(directory_name)
             (directory / "unexpected.exe").write_bytes(b"x")

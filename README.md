@@ -1,4 +1,4 @@
-# Pyping GUI v0.5.0
+# Pyping GUI v0.5.1
 
 Pyping 是一个基于 Python、Tkinter 与 `ping3` 的跨平台 Ping 桌面工具。本版本在保留原有 GUI 分区和操作顺序的基础上，重点优化界面一致性、长时间运行体验、日志管理、数据导出和 Windows 发布流程。
 
